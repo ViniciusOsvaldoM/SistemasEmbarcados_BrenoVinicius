@@ -10,6 +10,12 @@
 //      - Introdução ao RTOS 
 //      - Entender ESP_LOG 
 
+// -----------FreeRTOS--------------
+// Descrição da tarefa Função "vTaskDelay()": 
+//     Função da Biblioteca RTOS que implementa uma tarefa "delay" bloqueada 
+//     pelo tempo requisitado na função, podendo trabalhar em outra tarefa 
+//     durante este tempo. 
+
 
 #include <stdio.h>
 #include <inttypes.h>
