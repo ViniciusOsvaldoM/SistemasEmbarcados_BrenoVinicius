@@ -12,7 +12,7 @@
 
 // -----------FreeRTOS--------------
 // Descrição da tarefa Função "vTaskDelay()": 
-// Função da Biblioteca RTOS que implementa uma tarefa "delay" que é bloqueada pelo tempo inserido, 
+// Função da Biblioteca RTOS que bloqueia a tarefa atual pelo tempo inserido, 
 // podendo trabalhar em outra tarefa durante este tempo. 
 
 
