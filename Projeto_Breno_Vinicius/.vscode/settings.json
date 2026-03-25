@@ -15,5 +15,6 @@
     "--background-index",
     "--query-driver=**",
     "--compile-commands-dir=c:\\Users\\vinic\\Desktop\\SistemasEmbarcados_BrenoVinicius\\Projeto_Breno_Vinicius\\build"
-  ]
+  ],
+  "idf.flashType": "UART"
 }
