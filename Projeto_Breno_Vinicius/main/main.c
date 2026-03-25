@@ -1,4 +1,15 @@
-//Projeto_Breno_Vinicius
+// CEFET-MG - ENGENHARIA ELÉTRICA
+// Disciplina de Sistemas Embarcados
+
+// Professor: Túlio Charles
+// Alunos: Breno Guimarães
+//         Vinícius Osvaldo
+
+//PRÁTICA 1 - Objetivos:
+//      - Conhecer o ambiente de desenvolvimento 
+//      - Introdução ao RTOS 
+//      - Entender ESP_LOG 
+
 
 #include <stdio.h>
 #include <inttypes.h>
