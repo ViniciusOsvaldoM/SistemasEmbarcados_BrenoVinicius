@@ -33,9 +33,11 @@ static const char* TAG2 = "botoes";
 #define BOTAO1    21
 #define BOTAO2    22
 #define BOTAO3    23
-GPIO_INPUT_PIN_SEL  ((1ULL<<BOTAO1) | (1ULL<<BOTAO2) | (BOTAO3))
+#define GPIO_INPUT_PIN_SEL  ((1ULL<<BOTAO1) | (1ULL<<BOTAO2) | (BOTAO3))
 
 #define LED    2
+#define GPIO_INPUT_PIN_SEL  (1ULL<<LED)
+
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
@@ -56,11 +58,11 @@ static void gpio_task_example(void* arg)
             int level = gpio_get_level(io_num);
             if(io_num == BOTAO1) {
                 gpio_set_level(LED, 1);
-                ESPLOG(TAG2, "Botao 1 pressionado");
+                ESPLOGI(TAG2, "Botao 1 pressionado");
             }
             else if(io_num == BOTAO2) {
-                gpio_set_level(LED, 1);
-                ESPLOG(TAG2, "Botao 2 pressionado");
+                gpio_set_level(LED, 0);
+                ESPLOGI(TAG2, "Botao 2 pressionado");
             }
             else if(io_num == BOTAO3) {
                 LED_STATE = !LED_STATE;
@@ -117,7 +119,7 @@ void app_main(void)
     gpio_config(&io_conf);
 
     //interrupt of rising edge
-    io_conf.intr_type = GPIO_INTR_POSEDGE;
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
     //bit mask of the pins, use GPIO4/5 here
     io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
     //set as input mode
@@ -137,17 +139,17 @@ void app_main(void)
     //Inicia gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) BOTAO1);
+    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
     //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void*) BOTAO2);
+    gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
     //
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, gpio_isr_handler, (void*) BOTAO3);
+    gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
 
 
     //remove isr handler for gpio number.
-    gpio_isr_handler_remove(GPIO_INPUT_IO_0);
+    gpio_isr_handler_remove(BOTAO1);
     //hook isr handler for specific gpio pin again
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
+    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
 
 
 }
