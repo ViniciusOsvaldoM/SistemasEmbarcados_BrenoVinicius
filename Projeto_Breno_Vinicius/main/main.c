@@ -146,10 +146,4 @@ void app_main(void)
     gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
 
 
-    //remove isr handler for gpio number.
-    gpio_isr_handler_remove(BOTAO1);
-    //hook isr handler for specific gpio pin again
-    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) GPIO_INPUT_IO_0);
-
-
 }
