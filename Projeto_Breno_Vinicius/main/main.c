@@ -44,7 +44,7 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
     xQueueSendFromISR(queue, &ele, &high_task_awoken);
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = edata->valor_do_alarme + 1000000, // alarm in next 1s
+        .alarm_count = edata->valor_do_alarme + 100000, // alarm in next 1s
     };
     gptimer_set_alarm_action(timer, &alarm_config);
     // return whether we need to yield at the end of ISR
@@ -87,7 +87,7 @@ static void timer_task(void* arg)
  
             if(segundos_totais != ultimo_log) {
                 ultimo_log = segundo_totais;
-                ESP_LOGI(TAG, "Hora: %02d: %02d: %02 | Contagem: %llu | Alarme: %llu",
+                ESP_LOGI(TAG, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
                 relogio.hora, relogio.minutos, relogio.segundos,
                 dado.contagem, dado.valor_do_alarme);
 
