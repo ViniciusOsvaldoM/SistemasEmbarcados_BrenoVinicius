@@ -30,7 +30,7 @@ QueueHandle_t fila_contador = NULL;
 static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     static uint64_t contagem = 0;
-    uint64_t alarme = edata->alarm_value;
+    uint64_t alarme = edata->valor_do_alarme;
 
     contagem += alarme;
     acumulador ele = {
@@ -44,7 +44,7 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
     xQueueSendFromISR(queue, &ele, &high_task_awoken);
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = edata->alarm_value + 1000000, // alarm in next 1s
+        .alarm_count = edata->valor_do_alarme + 1000000, // alarm in next 1s
     };
     gptimer_set_alarm_action(timer, &alarm_config);
     // return whether we need to yield at the end of ISR
@@ -56,7 +56,7 @@ static void timer_task(void* arg)
 {
     relogio clock = {0};
     uint64_t ultimo_log = 0;
-    uint32_t io_num;
+    uint32_t dado;
     acumulador recebido;
 
     timer_config_t config = {
@@ -78,9 +78,9 @@ static void timer_task(void* arg)
     relogio clock = {0, 0, 0};
 
     for (;;) {
-        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+        if (xQueueReceive(gpio_evt_queue, &dado, portMAX_DELAY)) {
             gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-            uint64_t segundos_totais = io_num.contagem1 / 1000000;
+            uint64_t segundos_totais = dado.contagem / 1000000;
             relogio.hora = (segundos_totais/3600) % 24; 
             relogio.minutos = (segundos_totais / 60) % 60;
             relogio.segundos = segundos_totais % 60;
@@ -89,7 +89,7 @@ static void timer_task(void* arg)
                 ultimo_log = segundo_totais;
                 ESP_LOGI(TAG, "Hora: %02d: %02d: %02 | Contagem: %llu | Alarme: %llu",
                 relogio.hora, relogio.minutos, relogio.segundos,
-                io_num.contagem1, io_valor_do_alarme);
+                dado.contagem, dado.valor_do_alarme);
 
             }
         }
