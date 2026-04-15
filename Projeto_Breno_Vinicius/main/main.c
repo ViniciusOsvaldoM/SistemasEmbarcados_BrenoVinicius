@@ -1,82 +1,112 @@
-// CEFET-MG - ENGENHARIA ELÉTRICA
-// Disciplina de Sistemas Embarcados
-
-// Professor: Túlio Charles
-// Alunos: Breno Guimarães
-//         Vinícius Osvaldo
-
-//PRÁTICA 1 - Objetivos:
-//      - Conhecer o ambiente de desenvolvimento 
-//      - Introdução ao RTOS 
-//      - Entender ESP_LOG 
-
-// -----------FreeRTOS--------------
-// Descrição da tarefa Função "vTaskDelay()": 
-// Função da Biblioteca RTOS que bloqueia a tarefa atual pelo tempo inserido, 
-// podendo trabalhar em outra tarefa durante este tempo. 
-
+/*
+ * SPDX-FileCopyrightText: 2010-2022 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: CC0-1.0
+ */
 
 #include <stdio.h>
-#include <inttypes.h>
-#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_chip_info.h"
-#include "esp_flash.h"
-#include "esp_system.h"
+#include "freertos/queue.h"
+#include "driver/gptimer.h"
 #include "esp_log.h"
 
-static const char* TAG = "boot";
-static const char* TAG2 = "botoes";
+static const char *TAG = "example";
+
+typedef struct {
+    uint64_t contagem_atual;  
+    uint64_t valor_do_alarme;   
+} acumulador;
+
+typedef struct {
+    int horas;
+    int minutos;
+    int segundos;
+} relogio;
 
 
-#define BOTAO1    21
-#define BOTAO2    22
-#define BOTAO3    23
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<BOTAO1) | (1ULL<<BOTAO2) | (BOTAO3))
+QueueHandle_t fila_contador = NULL;
 
-#define LED    2
-#define GPIO_INPUT_PIN_SEL  (1ULL<<LED)
-
-
-#define ESP_INTR_FLAG_DEFAULT 0
-
-static QueueHandle_t gpio_evt_queue = NULL;
-
-static void IRAM_ATTR gpio_isr_handler(void* arg)
+static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
-    uint32_t gpio_num = (uint32_t) arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+    static uint64_t contagem = 0;
+    uint64_t alarme = edata->alarm_value;
+
+    contagem += alarme;
+    acumulador ele = {
+        .contagem_atual = contagem;
+        .valor_do_alarme = alarme;
+        };
+        
+    BaseType_t high_task_awoken = pdFALSE;
+    // Retrieve count value and send to queue
+
+    xQueueSendFromISR(queue, &ele, &high_task_awoken);
+    // reconfigure alarm value
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = edata->alarm_value + 1000000, // alarm in next 1s
+    };
+    gptimer_set_alarm_action(timer, &alarm_config);
+    // return whether we need to yield at the end of ISR
+    return (high_task_awoken == pdTRUE);
 }
 
-static void gpio_task_example(void* arg)
+
+static void timer_task(void* arg)
 {
+    relogio clock = {0};
+    uint64_t ultimo_log = 0;
     uint32_t io_num;
-    int LED_STATE = 0;
+    acumulador recebido;
+
+    timer_config_t config = {
+        .divider = 80
+        .counter_dir = TIMER_COUNT_UP,
+        .counter_en = TIMER_PAUSE,
+        .alarm_en = TIMER_ALARM_EN
+        .auto_reload = false;
+    }
+
+    /*  timer_init(TIMER_GROUP_0, TIMER_0,&config);
+    timer_set_counter_value(TIMER_GROUP_0,TIMER_0,0);
+    timer_set_alarm_value(TIMER_GROUP_0, TIMER_0,100000);
+    timer_enable_intr(TIMER_GROUP_0, TIMER_0)
+    timer_isr_callback_add(TIMER_GROUP_0,TIMER_0,timer_isr_callback_add,NULL,0)
+    timer_start(TIMER_GROUP_0,TIMER_0)
+    */
+   
+    relogio clock = {0, 0, 0};
+
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            int level = gpio_get_level(io_num);
-            if(io_num == BOTAO1) {
-                gpio_set_level(LED, 1);
-                ESPLOGI(TAG2, "Botao 1 pressionado");
-            }
-            else if(io_num == BOTAO2) {
-                gpio_set_level(LED, 0);
-                ESPLOGI(TAG2, "Botao 2 pressionado");
-            }
-            else if(io_num == BOTAO3) {
-                LED_STATE = !LED_STATE;
-                gpio_set_level(LED, LED_STATE);
-                ESPLOGI(TAG2, "Botao 3 pressionado");
+            gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+            uint64_t segundos_totais = io_num.contagem1 / 1000000;
+            relogio.hora = (segundos_totais/3600) % 24; 
+            relogio.minutos = (segundos_totais / 60) % 60;
+            relogio.segundos = segundos_totais % 60;
+ 
+            if(segundos_totais != ultimo_log) {
+                ultimo_log = segundo_totais;
+                ESP_LOGI(TAG, "Hora: %02d: %02d: %02 | Contagem: %llu | Alarme: %llu",
+                relogio.hora, relogio.minutos, relogio.segundos,
+                io_num.contagem1, io_valor_do_alarme);
+
             }
         }
+            
+            //start gpio task
+        
+        }
     }
-}
+
 
 
 void app_main(void)
 {
-    /* Print chip information */
+
+
+        /* -------------------------------- Chip information ------------------------------------------------ */
+
     esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
@@ -103,8 +133,10 @@ void app_main(void)
 
     ESP_LOGI(TAG,"Versão do ESP-IDF: %s\n", IDF_VER);
 
-        //Configuração do LED
-    gpio_config_t io_conf = {};
+
+    /* -------------------------------- Configuração do I/O ------------------------------------------------ */
+    
+        gpio_config_t io_conf = {};
     //disable interrupt
     io_conf.intr_type = GPIO_INTR_DISABLE;
     //set as output mode
@@ -131,19 +163,112 @@ void app_main(void)
     //change gpio interrupt type for one pin
     gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_ANYEDGE);
 
-    // Cria a fila e a task
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    //Inicia a task GPIO
-    xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
-
-    //Inicia gpio isr service
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
-    //
-    gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
+    /* -------------------------------- Iniicialização da tarefa ------------------------------------------------ */
 
 
+    xTaskCreate(timer_task, "Tarefa para o timer", 2048, NULL, 10, NULL);
+
+    example_queue_element_t ele;
+    QueueHandle_t queue = xQueueCreate(10, sizeof(example_queue_element_t));
+    if (!queue) {
+        ESP_LOGE(TAG, "Creating queue failed");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Create timer handle");
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = example_timer_on_alarm_cb_v1,
+    };
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
+
+    ESP_LOGI(TAG, "Enable timer");
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+
+    ESP_LOGI(TAG, "Start timer, stop it at alarm event");
+    gptimer_alarm_config_t alarm_config1 = {
+        .alarm_count = 1000000, // period = 1s
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config1));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+    if (xQueueReceive(queue, &ele, pdMS_TO_TICKS(2000))) {
+        ESP_LOGI(TAG, "Timer stopped, count=%llu", ele.event_count);
+    } else {
+        ESP_LOGW(TAG, "Missed one count event");
+    }
+
+    ESP_LOGI(TAG, "Set count value");
+    ESP_ERROR_CHECK(gptimer_set_raw_count(gptimer, 100));
+    ESP_LOGI(TAG, "Get count value");
+    uint64_t count;
+    ESP_ERROR_CHECK(gptimer_get_raw_count(gptimer, &count));
+    ESP_LOGI(TAG, "Timer count value=%llu", count);
+
+    // before updating the alarm callback, we should make sure the timer is not in the enable state
+    ESP_LOGI(TAG, "Disable timer");
+    ESP_ERROR_CHECK(gptimer_disable(gptimer));
+    // set a new callback function
+    cbs.on_alarm = example_timer_on_alarm_cb_v2;
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
+    ESP_LOGI(TAG, "Enable timer");
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+
+    ESP_LOGI(TAG, "Start timer, auto-reload at alarm event");
+    gptimer_alarm_config_t alarm_config2 = {
+        .reload_count = 0,
+        .alarm_count = 1000000, // period = 1s
+        .flags.auto_reload_on_alarm = true,
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config2));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+    int record = 4;
+    while (record) {
+        if (xQueueReceive(queue, &ele, pdMS_TO_TICKS(2000))) {
+            ESP_LOGI(TAG, "Timer reloaded, count=%llu", ele.event_count);
+            record--;
+        } else {
+            ESP_LOGW(TAG, "Missed one count event");
+        }
+    }
+    ESP_LOGI(TAG, "Stop timer");
+    ESP_ERROR_CHECK(gptimer_stop(gptimer));
+
+    ESP_LOGI(TAG, "Disable timer");
+    ESP_ERROR_CHECK(gptimer_disable(gptimer));
+    cbs.on_alarm = example_timer_on_alarm_cb_v3;
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
+    ESP_LOGI(TAG, "Enable timer");
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+
+    ESP_LOGI(TAG, "Start timer, update alarm value dynamically");
+    gptimer_alarm_config_t alarm_config3 = {
+        .alarm_count = 1000000, // period = 1s
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+    record = 4;
+    while (record) {
+        if (xQueueReceive(queue, &ele, pdMS_TO_TICKS(2000))) {
+            ESP_LOGI(TAG, "Timer alarmed, count=%llu", ele.event_count);
+            record--;
+        } else {
+            ESP_LOGW(TAG, "Missed one count event");
+        }
+    }
+
+    ESP_LOGI(TAG, "Stop timer");
+    ESP_ERROR_CHECK(gptimer_stop(gptimer));
+    ESP_LOGI(TAG, "Disable timer");
+    ESP_ERROR_CHECK(gptimer_disable(gptimer));
+    ESP_LOGI(TAG, "Delete timer");
+    ESP_ERROR_CHECK(gptimer_del_timer(gptimer));
+
+    vQueueDelete(queue);
 }
