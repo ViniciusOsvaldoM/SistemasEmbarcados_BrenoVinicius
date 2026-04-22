@@ -1,39 +1,46 @@
-/*
- * SPDX-FileCopyrightText: 2010-2022 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: CC0-1.0
- */
+// CEFET-MG - ENGENHARIA ELÉTRICA
+// Disciplina de Sistemas Embarcados
+
+// Professor: Túlio Charles
+// Alunos: Breno Guimarães
+//         Vinícius Osvaldo
+
+//PRÁTICA 4 - Objetivos:
+
+
 #include <stdio.h>
 #include <inttypes.h>
+#include <stdlib.h>
+#include <string.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
 #include "esp_log.h"
-
-static const char* TAG = "boot";
-static const char* TAG2 = "botoes";
-static const char* TAG3 = "RELOGIO";
-
+#include "driver/gpio.h"
+#include "driver/gptimer.h"
+#include "driver/ledc.h"
+#include "esp_err.h"
 
 
 #define BOTAO1    21
 #define BOTAO2    22
 #define BOTAO3    23
 #define GPIO_INPUT_PIN_SEL  ((1ULL<<BOTAO1) | (1ULL<<BOTAO2) | (BOTAO3))
-
 #define LED    2
-#define GPIO_INPUT_PIN_SEL  (1ULL<<LED)
-
+#define GPIO_OUTPUT_PIN_SEL  (1ULL<<LED)
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
+static const char* TAG = "boot";
+static const char* TAG2 = "botoes";
+static const char* TAG3 = "RELOGIO";
+
 static QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t fila_contador = NULL;
-
-
 
 typedef struct {
     uint64_t contagem_atual;  
@@ -53,112 +60,188 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
 }
 
-
-
+/* ----------------------- Tarefa GPIO  ------------------------------- */
 static void gpio_task_example(void* arg)
 {
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as output mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    //disable pull-down mode
+    io_conf.pull_down_en = 0;
+    //disable pull-up mode
+    io_conf.pull_up_en = 0;
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
+
+    //interrupt of rising edge
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    //bit mask of the pins, use GPIO4/5 here
+    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
+    //set as input mode
+    io_conf.mode = GPIO_MODE_INPUT;
+    //enable pull-up mode
+    io_conf.pull_up_en = 1;
+    gpio_config(&io_conf);
+
+    //change gpio interrupt type for one pin
+    gpio_set_intr_type(LED, GPIO_INTR_ANYEDGE);
+
     uint32_t io_num;
     int LED_STATE = 0;
+
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
             int level = gpio_get_level(io_num);
             if(io_num == BOTAO1) {
                 gpio_set_level(LED, 1);
-                ESPLOGI(TAG2, "Botao 1 pressionado");
+                ESP_LOGI(TAG2, "Botao 1 pressionado");
             }
             else if(io_num == BOTAO2) {
                 gpio_set_level(LED, 0);
-                ESPLOGI(TAG2, "Botao 2 pressionado");
+                ESP_LOGI(TAG2, "Botao 2 pressionado");
             }
             else if(io_num == BOTAO3) {
                 LED_STATE = !LED_STATE;
                 gpio_set_level(LED, LED_STATE);
-                ESPLOGI(TAG2, "Botao 3 pressionado");
+                ESP_LOGI(TAG2, "Botao 3 pressionado");
             }
         }
     }
 }
 
-
+/* ----------------------- Alarme do timer ------------------------------- */
 
 static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
 {
     static uint64_t contagem = 0;
-    uint64_t alarme = edata->valor_do_alarme;
+    uint64_t alarme = edata->count_value;
 
     contagem += alarme;
     acumulador ele = {
-        .contagem_atual = contagem;
-        .valor_do_alarme = alarme;
+        .contagem_atual = contagem,
+        .valor_do_alarme = alarme
         };
         
     BaseType_t high_task_awoken = pdFALSE;
     // Retrieve count value and send to queue
+    QueueHandle_t queue = (QueueHandle_t)user_data;
 
     xQueueSendFromISR(queue, &ele, &high_task_awoken);
+
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = edata->valor_do_alarme + 100000, // alarm in next 1s
+        .alarm_count = edata->count_value + 100000, // alarm in next 1s
     };
     gptimer_set_alarm_action(timer, &alarm_config);
     // return whether we need to yield at the end of ISR
     return (high_task_awoken == pdTRUE);
 }
 
-
+/* ----------------------- Tarefa do gptimer ------------------------------- */
 static void timer_task(void* arg)
 {
-    relogio clock = {0};
     uint64_t ultimo_log = 0;
-    uint32_t dado;
-    acumulador recebido;
+    acumulador dado;
 
-    timer_config_t config = {
-        .divider = 80
-        .counter_dir = TIMER_COUNT_UP,
-        .counter_en = TIMER_PAUSE,
-        .alarm_en = TIMER_ALARM_EN
-        .auto_reload = false;
-    }
 
-    /*  timer_init(TIMER_GROUP_0, TIMER_0,&config);
-    timer_set_counter_value(TIMER_GROUP_0,TIMER_0,0);
-    timer_set_alarm_value(TIMER_GROUP_0, TIMER_0,100000);
-    timer_enable_intr(TIMER_GROUP_0, TIMER_0)
-    timer_isr_callback_add(TIMER_GROUP_0,TIMER_0,timer_isr_callback_add,NULL,0)
-    timer_start(TIMER_GROUP_0,TIMER_0)
-    */
+    ESP_LOGI(TAG, "Create timer handle");
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+    };
+
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+    
+    semaphore_pwm = xSemaphoreCreateBinary(); // criação do semaphore binario 
    
     relogio clock = {0, 0, 0};
 
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &dado, portMAX_DELAY)) {
             gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-            uint64_t segundos_totais = dado.contagem / 1000000;
-            relogio.hora = (segundos_totais/3600) % 24; 
-            relogio.minutos = (segundos_totais / 60) % 60;
-            relogio.segundos = segundos_totais % 60;
+            uint64_t segundos_totais = dado.contagem_atual / 1000000;
+            clock.horas = (segundos_totais/3600) % 24; 
+            clock.minutos = (segundos_totais / 60) % 60;
+            clock.segundos = segundos_totais % 60;
  
             if(segundos_totais != ultimo_log) {
-                ultimo_log = segundo_totais;
+                ultimo_log = segundos_totais;
                 ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
-                relogio.hora, relogio.minutos, relogio.segundos,
-                dado.contagem, dado.valor_do_alarme);
+                clock.horas, clock.minutos, clock.segundos,
+                dado.contagem_atual, dado.valor_do_alarme);
 
             }
         }
-            
-            //start gpio task
-        
-        }
-    }
 
+        xSemaphoreGive(semaphore_pwm); //Função na TASK Timer para sincronizar com a task 
+PWM 
+        }
+}
+
+
+#define LEDC_TIMER              LEDC_TIMER_0
+#define LEDC_MODE               LEDC_LOW_SPEED_MODE
+#define LED                     (16) // Define the output GPIO
+#define OSCILOSCOPIO            (32) // Define the output GPIO
+#define LED_CHANNEL             LEDC_CHANNEL_0
+#define OSCILOSCOPIO_CHANNEL    LEDC_CHANNEL_1
+#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
+#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 4 kHz
+
+static SemaphoreHandle_t semaphore_pwm = NULL; 
+
+/* ----------------------- Tarefa do PWM ------------------------------- */
+static void pwm_task(void* arg)
+{
+    // Prepare and then apply the LEDC PWM timer configuration
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode       = LEDC_MODE,
+        .duty_resolution  = LEDC_DUTY_RES,
+        .timer_num        = LEDC_TIMER,
+        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 4 kHz
+        .clk_cfg          = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t led_channel = {
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = LED,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+
+    
+    // Prepare and then apply the LEDC PWM channel configuration
+    ledc_channel_config_t osciloscopio_channel = {
+        .speed_mode     = LEDC_MODE,
+        .channel        = LEDC_CHANNEL_0,
+        .timer_sel      = LEDC_TIMER,
+        .intr_type      = LEDC_INTR_DISABLE,
+        .gpio_num       = OSCILOSCOPIO,
+        .duty           = 0, // Set duty to 0%
+        .hpoint         = 0
+    };
+
+    ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
+    ESP_ERROR_CHECK(ledc_channel_config(&osciloscopio_channel));
+}   
 
 
 void app_main(void)
 {
 
-        /* -------------------------------- Chip information ------------------------------------------------ */
+    /* -------------------------------- PRATICA 1 ------------------------------------------------ */
 
     esp_chip_info_t chip_info;
     uint32_t flash_size;
@@ -189,34 +272,6 @@ void app_main(void)
 
     /* -------------------------------- PRATICA 2 ------------------------------------------------ */
     
-        gpio_config_t io_conf = {};
-    //disable interrupt
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    //set as output mode
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
-    io_conf.pull_down_en = 0;
-    //disable pull-up mode
-    io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
-    gpio_config(&io_conf);
-
-    //interrupt of rising edge
-    io_conf.intr_type = GPIO_INTR_NEGEDGE;
-    //bit mask of the pins, use GPIO4/5 here
-    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    //set as input mode
-    io_conf.mode = GPIO_MODE_INPUT;
-    //enable pull-up mode
-    io_conf.pull_up_en = 1;
-    gpio_config(&io_conf);
-
-    //change gpio interrupt type for one pin
-    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_ANYEDGE);
-
-    
     // Cria a fila e a task
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     //Inicia a task GPIO
@@ -236,10 +291,10 @@ void app_main(void)
 
     xTaskCreate(timer_task, "Tarefa para o timer", 2048, NULL, 10, NULL);
 
-    example_queue_element_t ele;
-    QueueHandle_t queue = xQueueCreate(10, sizeof(example_queue_element_t));
+    acumulador ele;
+    QueueHandle_t queue = xQueueCreate(10, sizeof(acumulador));
     if (!queue) {
-        ESP_LOGE(TAG_relogio, "Creating queue failed");
+        ESP_LOGE(TAG3, "Creating queue failed");
         return;
     }
 
@@ -250,16 +305,26 @@ void app_main(void)
         .direction = GPTIMER_COUNT_UP,
         .resolution_hz = 1000000, // 1MHz, 1 tick=1us
     };
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+    
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = example_timer_on_alarm_cb_v3,
+    };
 
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config2));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
-
-    cbs.on_alarm = example_timer_on_alarm_cb_v3;
     ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
     ESP_LOGI(TAG, "Enable timer");
     ESP_ERROR_CHECK(gptimer_enable(gptimer));
 
+    ESP_LOGI(TAG, "Start timer, update alarm value dynamically");
+    gptimer_alarm_config_t alarm_config3 = {
+        .alarm_count = 1000000, // period = 1s
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+
+        /* -------------------------------- PRATICA 4 ------------------------------------------------ */
+
+        
 }
 
 
