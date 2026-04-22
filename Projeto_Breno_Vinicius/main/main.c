@@ -43,6 +43,9 @@ static QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t fila_contador = NULL;
 QueueHandle_t fila_pwm = NULL;
 
+static SemaphoreHandle_t semaphore_pwm = NULL; 
+
+
 
 typedef struct {
     uint64_t contagem_atual;  
@@ -189,7 +192,7 @@ static void timer_task(void* arg)
         }
 
         }
-}
+
 
 
 #define LEDC_TIMER              LEDC_TIMER_0
@@ -202,7 +205,6 @@ static void timer_task(void* arg)
 #define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
 #define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 4 kHz
 
-static SemaphoreHandle_t semaphore_pwm = NULL; 
 
 /* ----------------------- Tarefa do PWM ------------------------------- */
 static void pwm_task(void* arg)
