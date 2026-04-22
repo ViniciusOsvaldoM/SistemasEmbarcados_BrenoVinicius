@@ -41,6 +41,8 @@ static const char* TAG3 = "RELOGIO";
 
 static QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t fila_contador = NULL;
+QueueHandle_t fila_pwm = NULL;
+
 
 typedef struct {
     uint64_t contagem_atual;  
@@ -99,6 +101,7 @@ static void gpio_task_example(void* arg)
             if(io_num == BOTAO1) {
                 gpio_set_level(LED, 1);
                 ESP_LOGI(TAG2, "Botao 1 pressionado");
+                
             }
             else if(io_num == BOTAO2) {
                 gpio_set_level(LED, 0);
@@ -109,7 +112,11 @@ static void gpio_task_example(void* arg)
                 gpio_set_level(LED, LED_STATE);
                 ESP_LOGI(TAG2, "Botao 3 pressionado");
             }
+
         }
+
+        xQueueSendFromISR(fila_pwm, &io_num, NULL);
+
     }
 }
 
@@ -131,7 +138,7 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
     QueueHandle_t queue = (QueueHandle_t)user_data;
 
     xQueueSendFromISR(queue, &ele, &high_task_awoken);
-
+    
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
         .alarm_count = edata->count_value + 100000, // alarm in next 1s
@@ -158,7 +165,6 @@ static void timer_task(void* arg)
 
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
     
-    semaphore_pwm = xSemaphoreCreateBinary(); // criação do semaphore binario 
    
     relogio clock = {0, 0, 0};
 
@@ -178,9 +184,10 @@ static void timer_task(void* arg)
 
             }
         }
+        xSemaphoreGive(semaphore_pwm);
+            
+        }
 
-        xSemaphoreGive(semaphore_pwm); //Função na TASK Timer para sincronizar com a task 
-PWM 
         }
 }
 
@@ -188,7 +195,7 @@ PWM
 #define LEDC_TIMER              LEDC_TIMER_0
 #define LEDC_MODE               LEDC_LOW_SPEED_MODE
 #define LED                     (16) // Define the output GPIO
-#define OSCILOSCOPIO            (32) // Define the output GPIO
+#define OSCILOSCOPIO            (33) // Define the output GPIO
 #define LED_CHANNEL             LEDC_CHANNEL_0
 #define OSCILOSCOPIO_CHANNEL    LEDC_CHANNEL_1
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
@@ -200,6 +207,9 @@ static SemaphoreHandle_t semaphore_pwm = NULL;
 /* ----------------------- Tarefa do PWM ------------------------------- */
 static void pwm_task(void* arg)
 {
+    int duty;
+    bool manual;
+    int intensidade;
     // Prepare and then apply the LEDC PWM timer configuration
     ledc_timer_config_t ledc_timer = {
         .speed_mode       = LEDC_MODE,
@@ -225,7 +235,7 @@ static void pwm_task(void* arg)
     // Prepare and then apply the LEDC PWM channel configuration
     ledc_channel_config_t osciloscopio_channel = {
         .speed_mode     = LEDC_MODE,
-        .channel        = LEDC_CHANNEL_0,
+        .channel        = LEDC_CHANNEL_1,
         .timer_sel      = LEDC_TIMER,
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = OSCILOSCOPIO,
@@ -233,8 +243,32 @@ static void pwm_task(void* arg)
         .hpoint         = 0
     };
 
+    for (;;) {
+    xSemaphoreTake(semaphore_pwm, portMAX_DELAY)
     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
     ESP_ERROR_CHECK(ledc_channel_config(&osciloscopio_channel));
+    xQueueReceive(fila_pwm, &duty, portMAX_DELAY)
+
+    if (duty == 1){
+        manual = false;
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+        
+    }
+    else if (duty == 2){
+        intensidade = 0;
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+        manual = true;
+    }
+    else if (duty == 3 && manual == true){
+        intensidade += 100;
+        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
+        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+    }
+    
+
+    }
 }   
 
 
@@ -272,6 +306,8 @@ void app_main(void)
 
     /* -------------------------------- PRATICA 2 ------------------------------------------------ */
     
+    semaphore_pwm = xSemaphoreCreateBinary();
+
     // Cria a fila e a task
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     //Inicia a task GPIO
@@ -322,9 +358,9 @@ void app_main(void)
     ESP_ERROR_CHECK(gptimer_start(gptimer));
 
 
-        /* -------------------------------- PRATICA 4 ------------------------------------------------ */
+    /* -------------------------------- PRATICA 4 ------------------------------------------------ */
 
-        
+
 }
 
 
