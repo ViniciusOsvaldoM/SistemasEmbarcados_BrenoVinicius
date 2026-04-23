@@ -45,18 +45,16 @@ QueueHandle_t fila_pwm = NULL;
 
 static SemaphoreHandle_t semaphore_pwm = NULL; 
 
-
-
 typedef struct {
     uint64_t contagem_atual;  
     uint64_t valor_do_alarme;   
-} acumulador;
+} tAcumulador;
 
 typedef struct {
     int horas;
     int minutos;
     int segundos;
-} relogio;
+} relogio_t;
 
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
@@ -95,6 +93,17 @@ static void gpio_task_example(void* arg)
     //change gpio interrupt type for one pin
     gpio_set_intr_type(LED, GPIO_INTR_ANYEDGE);
 
+
+    // Inicia gpio isr service
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    // hook isr handler for specific gpio pin
+    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
+    // hook isr handler for specific gpio pin
+    gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
+    
+    gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
+
+
     uint32_t io_num;
     int LED_STATE = 0;
 
@@ -131,16 +140,14 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
     uint64_t alarme = edata->count_value;
 
     contagem += alarme;
-    acumulador ele = {
+    tAcumulador ele = {
         .contagem_atual = contagem,
         .valor_do_alarme = alarme
-        };
+    };
         
     BaseType_t high_task_awoken = pdFALSE;
-    // Retrieve count value and send to queue
-    QueueHandle_t queue = (QueueHandle_t)user_data;
-
-    xQueueSendFromISR(queue, &ele, &high_task_awoken);
+    
+    xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
     
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
@@ -155,8 +162,7 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
 static void timer_task(void* arg)
 {
     uint64_t ultimo_log = 0;
-    acumulador dado;
-
+    tAcumulador dado;
 
     ESP_LOGI(TAG, "Create timer handle");
     gptimer_handle_t gptimer = NULL;
@@ -168,17 +174,30 @@ static void timer_task(void* arg)
 
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
     
-   
-    relogio clock = {0, 0, 0};
+   gptimer_event_callbacks_t cbs = {
+        .on_alarm = example_timer_on_alarm_cb_v3,
+    };
 
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+    ESP_LOGI(TAG, "Enable timer");
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+
+    ESP_LOGI(TAG, "Start timer, update alarm value dynamically");
+    gptimer_alarm_config_t alarm_config3 = {
+        .alarm_count = 1000000, // period = 1s
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
+
+    relogio_t clock = {0, 0, 0};
+  uint64_t segundos_totais = 0;
     for (;;) {
-        if (xQueueReceive(gpio_evt_queue, &dado, portMAX_DELAY)) {
-           
-            uint64_t segundos_totais = dado.contagem_atual / 1000000;
+        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY)) {
+            segundos_totais = dado.contagem_atual / 1000000;
             clock.horas = (segundos_totais/3600) % 24; 
             clock.minutos = (segundos_totais / 60) % 60;
             clock.segundos = segundos_totais % 60;
- 
+
             if(segundos_totais != ultimo_log) {
                 ultimo_log = segundos_totais;
                 ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
@@ -187,7 +206,7 @@ static void timer_task(void* arg)
 
             }
         }
-        xSemaphoreGive(semaphore_pwm);
+        //xSemaphoreGive(semaphore_pwm);
             
         }
 
@@ -209,6 +228,7 @@ static void timer_task(void* arg)
 /* ----------------------- Tarefa do PWM ------------------------------- */
 static void pwm_task(void* arg)
 {
+    
     int duty;
     bool manual;
     int intensidade;
@@ -268,7 +288,6 @@ static void pwm_task(void* arg)
         ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
         ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
     }
-    
 
     }
 }   
@@ -277,9 +296,8 @@ static void pwm_task(void* arg)
 void app_main(void)
 {
 
-    /* -------------------------------- PRATICA 1 ------------------------------------------------ */
-
- /*   esp_chip_info_t chip_info;
+   
+    esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
     ESP_LOGI(TAG,"Este é um microcontrolador %s com %d núcleo(s), %s%s%s%s, ",
@@ -295,76 +313,31 @@ void app_main(void)
     ESP_LOGI(TAG,"silicon revision v%d.%d, \n", major_rev, minor_rev);
     if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
         ESP_LOGE(TAG,"Falha na Obtenção da Memória Flash!");
-       // return;
+       return;
     }
 
     printf("teste\n");
-    //ESP_LOGI(TAG,"Memória Flash: %" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
-    //       (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+    ESP_LOGI(TAG,"Memória Flash: %" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
+          (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
     ESP_LOGI(TAG,"Free heap: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
     ESP_LOGI(TAG,"Versão do ESP-IDF: %s\n", IDF_VER);
 
-*/
-    /* -------------------------------- PRATICA 2 ------------------------------------------------ */
+
+    // Criação das filas
+    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    fila_contador = xQueueCreate(10,sizeof(uint32_t));
+    fila_pwm = xQueueCreate(10,sizeof(uint32_t));
     
+    // Criação do semáforo
     semaphore_pwm = xSemaphoreCreateBinary();
 
-    // Cria a fila e a task
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    //Inicia a task GPIO
-    xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
-
-    //Inicia gpio isr service
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
-    //hook isr handler for specific gpio pin
-    gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
-    //
-    gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
-
-    /* -------------------------------- PRATICA 3 ------------------------------------------------ */
-
-
-    xTaskCreate(timer_task, "Tarefa para o timer", 2048, NULL, 10, NULL);
-
-    acumulador ele;
-    QueueHandle_t queue = xQueueCreate(10, sizeof(acumulador));
-    if (!queue) {
-        ESP_LOGE(TAG3, "Creating queue failed");
-        return;
-    }
-
-    ESP_LOGI(TAG, "Create timer handle");
-    gptimer_handle_t gptimer = NULL;
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
-    };
-    
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = example_timer_on_alarm_cb_v3,
-    };
-
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, queue));
-    ESP_LOGI(TAG, "Enable timer");
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-
-    ESP_LOGI(TAG, "Start timer, update alarm value dynamically");
-    gptimer_alarm_config_t alarm_config3 = {
-        .alarm_count = 1000000, // period = 1s
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
-
-
-    /* -------------------------------- PRATICA 4 ------------------------------------------------ */
-
+    // xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
+    xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
 
 }
 
 
 
+ 
