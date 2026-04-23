@@ -173,7 +173,7 @@ static void timer_task(void* arg)
 
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &dado, portMAX_DELAY)) {
-            gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+           
             uint64_t segundos_totais = dado.contagem_atual / 1000000;
             clock.horas = (segundos_totais/3600) % 24; 
             clock.minutos = (segundos_totais / 60) % 60;
@@ -246,10 +246,10 @@ static void pwm_task(void* arg)
     };
 
     for (;;) {
-    xSemaphoreTake(semaphore_pwm, portMAX_DELAY)
+    xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
     ESP_ERROR_CHECK(ledc_channel_config(&osciloscopio_channel));
-    xQueueReceive(fila_pwm, &duty, portMAX_DELAY)
+    xQueueReceive(fila_pwm, &duty, portMAX_DELAY);
 
     if (duty == 1){
         manual = false;
@@ -279,7 +279,7 @@ void app_main(void)
 
     /* -------------------------------- PRATICA 1 ------------------------------------------------ */
 
-    esp_chip_info_t chip_info;
+ /*   esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
     ESP_LOGI(TAG,"Este é um microcontrolador %s com %d núcleo(s), %s%s%s%s, ",
@@ -295,17 +295,18 @@ void app_main(void)
     ESP_LOGI(TAG,"silicon revision v%d.%d, \n", major_rev, minor_rev);
     if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
         ESP_LOGE(TAG,"Falha na Obtenção da Memória Flash!");
-        return;
+       // return;
     }
 
-    ESP_LOGI(TAG,"Memória Flash: %" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
-           (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+    printf("teste\n");
+    //ESP_LOGI(TAG,"Memória Flash: %" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
+    //       (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
     ESP_LOGI(TAG,"Free heap: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
 
     ESP_LOGI(TAG,"Versão do ESP-IDF: %s\n", IDF_VER);
 
-
+*/
     /* -------------------------------- PRATICA 2 ------------------------------------------------ */
     
     semaphore_pwm = xSemaphoreCreateBinary();
