@@ -1,11 +1,12 @@
 // CEFET-MG - ENGENHARIA ELÉTRICA
 // Disciplina de Sistemas Embarcados
-
 // Professor: Túlio Charles
 // Alunos: Breno Guimarães
 //         Vinícius Osvaldo
 
-//PRÁTICA 4 - Objetivos:
+// PRÁTICA 4  
+// Objetivo: fazer um controle PWM utilizando 3 botões por meio de interrupções, timers, filas e semáforos.
+
 
 
 #include <stdio.h>
@@ -15,7 +16,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
+#include "freertos/queue.h"     
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
@@ -48,7 +49,7 @@ static SemaphoreHandle_t semaphore_pwm = NULL;
 typedef struct {
     uint64_t contagem_atual;  
     uint64_t valor_do_alarme;   
-} tAcumulador;
+} acumulador_t;
 
 typedef struct {
     int horas;
@@ -98,7 +99,6 @@ static void gpio_task_example(void* arg)
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     // hook isr handler for specific gpio pin
     gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
-    // hook isr handler for specific gpio pin
     gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
     
     gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
@@ -140,7 +140,7 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
     uint64_t alarme = edata->count_value;
 
     contagem += alarme;
-    tAcumulador ele = {
+    acumulador_t ele = {
         .contagem_atual = contagem,
         .valor_do_alarme = alarme
     };
@@ -162,8 +162,8 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
 static void timer_task(void* arg)
 {
     uint64_t ultimo_log = 0;
-    tAcumulador dado;
-
+    acumulador_t dado;
+    
     ESP_LOGI(TAG, "Create timer handle");
     gptimer_handle_t gptimer = NULL;
     gptimer_config_t timer_config = {
@@ -174,7 +174,7 @@ static void timer_task(void* arg)
 
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
     
-   gptimer_event_callbacks_t cbs = {
+    gptimer_event_callbacks_t cbs = {
         .on_alarm = example_timer_on_alarm_cb_v3,
     };
 
