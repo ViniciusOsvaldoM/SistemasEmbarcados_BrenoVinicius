@@ -100,7 +100,6 @@ static void gpio_task_example(void* arg)
     // hook isr handler for specific gpio pin
     gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
     gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
-    
     gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
 
 
@@ -109,25 +108,25 @@ static void gpio_task_example(void* arg)
 
     for (;;) {
         if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            int level = gpio_get_level(io_num);
-            if(io_num == BOTAO1) {
-                gpio_set_level(LED, 1);
-                ESP_LOGI(TAG2, "Botao 1 pressionado");
+           // int level = gpio_get_level(io_num);
+        //   *  if(io_num == BOTAO1) {
+        //         gpio_set_level(LED, 1);
+        //         ESP_LOGI(TAG2, "Botao 1 pressionado");
                 
-            }
-            else if(io_num == BOTAO2) {
-                gpio_set_level(LED, 0);
-                ESP_LOGI(TAG2, "Botao 2 pressionado");
-            }
-            else if(io_num == BOTAO3) {
-                LED_STATE = !LED_STATE;
-                gpio_set_level(LED, LED_STATE);
-                ESP_LOGI(TAG2, "Botao 3 pressionado");
-            }
+        //     }
+        //     else if(io_num == BOTAO2) {
+        //         gpio_set_level(LED, 0);
+        //         ESP_LOGI(TAG2, "Botao 2 pressionado");
+        //     }
+        //     else if(io_num == BOTAO3) {
+        //         LED_STATE = !LED_STATE;
+        //         gpio_set_level(LED, LED_STATE);
+        //         ESP_LOGI(TAG2, "Botao 3 pressionado");
+        //     }
 
         }
 
-        xQueueSendFromISR(fila_pwm, &io_num, NULL);
+        //xQueueSendFromISR(fila_pwm, &io_num, NULL);
 
     }
 }
@@ -206,7 +205,7 @@ static void timer_task(void* arg)
 
             }
         }
-        //xSemaphoreGive(semaphore_pwm);
+        xSemaphoreGive(semaphore_pwm);
             
         }
 
@@ -222,7 +221,7 @@ static void timer_task(void* arg)
 #define OSCILOSCOPIO_CHANNEL    LEDC_CHANNEL_1
 #define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
-#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 4 kHz
+#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
 
 /* ----------------------- Tarefa do PWM ------------------------------- */
@@ -237,7 +236,7 @@ static void pwm_task(void* arg)
         .speed_mode       = LEDC_MODE,
         .duty_resolution  = LEDC_DUTY_RES,
         .timer_num        = LEDC_TIMER,
-        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 4 kHz
+        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
         .clk_cfg          = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
