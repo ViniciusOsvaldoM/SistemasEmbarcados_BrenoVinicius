@@ -4,10 +4,10 @@
 // Alunos: Breno Guimarães
 //         Vinícius Osvaldo
 
-// PRÁTICA 4  
+// PRÁTICA 4
 // Objetivo: fazer um controle PWM utilizando 3 botões por meio de interrupções, timers, filas e semáforos.
 
- /*
+/*
  * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -19,7 +19,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"     
+#include "freertos/queue.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
@@ -33,109 +33,114 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
-
-#define BOTAO1    21
-#define BOTAO2    22
-#define BOTAO3    23
-#define GPIO_INPUT_PIN_SEL  ((1ULL<<BOTAO1) | (1ULL<<BOTAO2) | (BOTAO3))
-#define LED    2
-#define GPIO_OUTPUT_PIN_SEL  (1ULL<<LED)
+#define BOTAO1 21
+#define BOTAO2 22
+#define BOTAO3 23
+#define GPIO_INPUT_PIN_SEL ((1ULL << BOTAO1) | (1ULL << BOTAO2) | (BOTAO3))
+#define LED 2
+#define GPIO_OUTPUT_PIN_SEL (1ULL << LED)
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
-static const char* TAG = "boot";
-static const char* TAG2 = "botoes";
-static const char* TAG3 = "RELOGIO";
+static const char *TAG = "boot";
+static const char *TAG2 = "botoes";
+static const char *TAG3 = "RELOGIO";
 const static char *TAG4 = "EXAMPLE";
 
 static QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t fila_contador = NULL;
 QueueHandle_t fila_pwm = NULL;
+QueueHandle_t fila_ADC = NULL;
+static SemaphoreHandle_t semaphore_ADC = NULL;
 
-static SemaphoreHandle_t semaphore_pwm = NULL; 
+static SemaphoreHandle_t semaphore_pwm = NULL;
 
-typedef struct {
-    uint64_t contagem_atual;  
-    uint64_t valor_do_alarme;   
+static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
+static void example_adc_calibration_deinit(adc_cali_handle_t handle);
+
+typedef struct
+{
+    uint64_t contagem_atual;
+    uint64_t valor_do_alarme;
 } acumulador_t;
 
-typedef struct {
+typedef struct
+{
     int horas;
     int minutos;
     int segundos;
 } relogio_t;
 
-
-static void IRAM_ATTR gpio_isr_handler(void* arg)
+static void IRAM_ATTR gpio_isr_handler(void *arg)
 {
-    uint32_t gpio_num = (uint32_t) arg;
+    uint32_t gpio_num = (uint32_t)arg;
     xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
 }
 
 /* ----------------------- Tarefa GPIO  ------------------------------- */
-static void gpio_task_example(void* arg)
+static void gpio_task_example(void *arg)
 {
     gpio_config_t io_conf = {};
-    //disable interrupt
+    // disable interrupt
     io_conf.intr_type = GPIO_INTR_DISABLE;
-    //set as output mode
+    // set as output mode
     io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO18/19
+    // bit mask of the pins that you want to set,e.g.GPIO18/19
     io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    //disable pull-down mode
+    // disable pull-down mode
     io_conf.pull_down_en = 0;
-    //disable pull-up mode
+    // disable pull-up mode
     io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
+    // configure GPIO with the given settings
     gpio_config(&io_conf);
 
-    //interrupt of rising edge
+    // interrupt of rising edge
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
-    //bit mask of the pins, use GPIO4/5 here
+    // bit mask of the pins, use GPIO4/5 here
     io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    //set as input mode
+    // set as input mode
     io_conf.mode = GPIO_MODE_INPUT;
-    //enable pull-up mode
+    // enable pull-up mode
     io_conf.pull_up_en = 1;
     gpio_config(&io_conf);
 
-    //change gpio interrupt type for one pin
+    // change gpio interrupt type for one pin
     gpio_set_intr_type(LED, GPIO_INTR_ANYEDGE);
-
 
     // Inicia gpio isr service
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     // hook isr handler for specific gpio pin
-    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void*) BOTAO1);
-    gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void*) BOTAO2);
-    gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void*) BOTAO3);
-
+    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void *)BOTAO1);
+    gpio_isr_handler_add(BOTAO2, gpio_isr_handler, (void *)BOTAO2);
+    gpio_isr_handler_add(BOTAO3, gpio_isr_handler, (void *)BOTAO3);
 
     uint32_t io_num;
     int LED_STATE = 0;
 
-    for (;;) {
-        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+    for (;;)
+    {
+        if (xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY))
+        {
             int level = gpio_get_level(io_num);
-           *  if(io_num == BOTAO1) {
-                 gpio_set_level(LED, 1);
-                 ESP_LOGI(TAG2, "Botao 1 pressionado");
-                
-             }
-             else if(io_num == BOTAO2) {
-                 gpio_set_level(LED, 0);
-               ESP_LOGI(TAG2, "Botao 2 pressionado");
-             }
-             else if(io_num == BOTAO3) {
-                 LED_STATE = !LED_STATE;
-                 gpio_set_level(LED, LED_STATE);
-                 ESP_LOGI(TAG2, "Botao 3 pressionado");
-             }
-
+            if (io_num == BOTAO1)
+            {
+                gpio_set_level(LED, 1);
+                ESP_LOGI(TAG2, "Botao 1 pressionado");
+            }
+            else if (io_num == BOTAO2)
+            {
+                gpio_set_level(LED, 0);
+                ESP_LOGI(TAG2, "Botao 2 pressionado");
+            }
+            else if (io_num == BOTAO3)
+            {
+                LED_STATE = !LED_STATE;
+                gpio_set_level(LED, LED_STATE);
+                ESP_LOGI(TAG2, "Botao 3 pressionado");
+            }
         }
 
         xQueueSendFromISR(fila_pwm, &io_num, NULL);
-
     }
 }
 
@@ -149,13 +154,12 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
     contagem += alarme;
     acumulador_t ele = {
         .contagem_atual = contagem,
-        .valor_do_alarme = alarme
-    };
-        
+        .valor_do_alarme = alarme};
+
     BaseType_t high_task_awoken = pdFALSE;
-    
+
     xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
-    
+
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
         .alarm_count = edata->count_value + 100000, // alarm in next 1s
@@ -166,11 +170,11 @@ static bool IRAM_ATTR example_timer_on_alarm_cb_v3(gptimer_handle_t timer, const
 }
 
 /* ----------------------- Tarefa do gptimer ------------------------------- */
-static void timer_task(void* arg)
+static void timer_task(void *arg)
 {
     uint64_t ultimo_log = 0;
     acumulador_t dado;
-    
+
     ESP_LOGI(TAG, "Create timer handle");
     gptimer_handle_t gptimer = NULL;
     gptimer_config_t timer_config = {
@@ -180,7 +184,7 @@ static void timer_task(void* arg)
     };
 
     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
-    
+
     gptimer_event_callbacks_t cbs = {
         .on_alarm = example_timer_on_alarm_cb_v3,
     };
@@ -197,149 +201,140 @@ static void timer_task(void* arg)
     ESP_ERROR_CHECK(gptimer_start(gptimer));
 
     relogio_t clock = {0, 0, 0};
-  uint64_t segundos_totais = 0;
-    for (;;) {
-        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY)) {
+    uint64_t segundos_totais = 0;
+    int voltage;
+    for (;;)
+    {
+        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
+        {
             segundos_totais = dado.contagem_atual / 1000000;
-            clock.horas = (segundos_totais/3600) % 24; 
+            clock.horas = (segundos_totais / 3600) % 24;
             clock.minutos = (segundos_totais / 60) % 60;
             clock.segundos = segundos_totais % 60;
 
-            if(segundos_totais != ultimo_log) {
+            if (segundos_totais != ultimo_log)
+            {
                 ultimo_log = segundos_totais;
                 ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
-                clock.horas, clock.minutos, clock.segundos,
-                dado.contagem_atual, dado.valor_do_alarme);
+                         clock.horas, clock.minutos, clock.segundos,
+                         dado.contagem_atual, dado.valor_do_alarme);
             }
         }
-        if (xQueueReceive(fila_ADC, &voltage[0][0], 10)) {
-    
-             ESP_LOGI(TAG4, "ADC%d Channel[%d] Raw Data: %d", 1, canal 0, voltage[0][0]);
+        if (xQueueReceive(fila_ADC, &voltage, 10))
+        {
+
+            ESP_LOGI(TAG4, "ADC1 Channel[0] Raw Data: %d", voltage);
         }
-        
+
         xSemaphoreGive(semaphore_pwm);
-        XSemaphoreGive(semaphore_ADC);
-            
-        }
+        xSemaphoreGive(semaphore_ADC);
+    }
+}
 
-        }
-
-
-
-#define LEDC_TIMER              LEDC_TIMER_0
-#define LEDC_MODE               LEDC_LOW_SPEED_MODE
-#define LED                     (16) // Define the output GPIO
-#define OSCILOSCOPIO            (33) // Define the output GPIO
-#define LED_CHANNEL             LEDC_CHANNEL_0
-#define OSCILOSCOPIO_CHANNEL    LEDC_CHANNEL_1
-#define LEDC_DUTY_RES           LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY               (4096) // Set duty to 50%. (2 ** 13) * 50% = 4096
-#define LEDC_FREQUENCY          (5000) // Frequency in Hertz. Set frequency at 5 kHz
-
+#define LEDC_TIMER LEDC_TIMER_0
+#define LEDC_MODE LEDC_LOW_SPEED_MODE
+#define LED (16)          // Define the output GPIO
+#define OSCILOSCOPIO (33) // Define the output GPIO
+#define LED_CHANNEL LEDC_CHANNEL_0
+#define OSCILOSCOPIO_CHANNEL LEDC_CHANNEL_1
+#define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
+#define LEDC_DUTY (4096)                // Set duty to 50%. (2 ** 13) * 50% = 4096
+#define LEDC_FREQUENCY (5000)           // Frequency in Hertz. Set frequency at 5 kHz
 
 /* ----------------------- Tarefa do PWM ------------------------------- */
-static void pwm_task(void* arg)
+static void pwm_task(void *arg)
 {
-    
+
     int duty;
     bool manual;
     int intensidade;
     // Prepare and then apply the LEDC PWM timer configuration
     ledc_timer_config_t ledc_timer = {
-        .speed_mode       = LEDC_MODE,
-        .duty_resolution  = LEDC_DUTY_RES,
-        .timer_num        = LEDC_TIMER,
-        .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 5 kHz
-        .clk_cfg          = LEDC_AUTO_CLK
-    };
+        .speed_mode = LEDC_MODE,
+        .duty_resolution = LEDC_DUTY_RES,
+        .timer_num = LEDC_TIMER,
+        .freq_hz = LEDC_FREQUENCY, // Set output frequency at 5 kHz
+        .clk_cfg = LEDC_AUTO_CLK};
     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
     // Prepare and then apply the LEDC PWM channel configuration
     ledc_channel_config_t led_channel = {
-        .speed_mode     = LEDC_MODE,
-        .channel        = LEDC_CHANNEL_0,
-        .timer_sel      = LEDC_TIMER,
-        .intr_type      = LEDC_INTR_DISABLE,
-        .gpio_num       = LED,
-        .duty           = 0, // Set duty to 0%
-        .hpoint         = 0
-    };
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = LED,
+        .duty = 0, // Set duty to 0%
+        .hpoint = 0};
 
-    
     // Prepare and then apply the LEDC PWM channel configuration
     ledc_channel_config_t osciloscopio_channel = {
-        .speed_mode     = LEDC_MODE,
-        .channel        = LEDC_CHANNEL_1,
-        .timer_sel      = LEDC_TIMER,
-        .intr_type      = LEDC_INTR_DISABLE,
-        .gpio_num       = OSCILOSCOPIO,
-        .duty           = 0, // Set duty to 0%
-        .hpoint         = 0
-    };
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL_1,
+        .timer_sel = LEDC_TIMER,
+        .intr_type = LEDC_INTR_DISABLE,
+        .gpio_num = OSCILOSCOPIO,
+        .duty = 0, // Set duty to 0%
+        .hpoint = 0};
     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-    ESP_ERROR_CHECK(ledc_channel_config(&osciloscopio_channel))
-    
-    for (;;) {
-    xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
-    xQueueReceive(fila_pwm, &duty, 10);
-    
+    ESP_ERROR_CHECK(ledc_channel_config(&osciloscopio_channel));
 
-    if (duty == 1){
-        manual = false;
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-        
-    }
-    else if (duty == 2){
-        intensidade = 0;
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-        manual = true;
-    }
-    else if (duty == 3 && manual == true){
-        intensidade += 100;
-        ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
-        ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-    }
+    for (;;)
+    {
+        xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
+        xQueueReceive(fila_pwm, &duty, 10);
 
+        if (duty == 1)
+        {
+            manual = false;
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+        }
+        else if (duty == 2)
+        {
+            intensidade = 0;
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+            manual = true;
+        }
+        else if (duty == 3 && manual == true)
+        {
+            intensidade += 100;
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+        }
     }
-}   
-
+}
 
 //----------------------- ADC -------------------------------
-static void ADC_task(void* arg)
-{
 /*---------------------------------------------------------------
-        ADC General Macros
----------------------------------------------------------------*/
-//ADC1 Channels
+         ADC General Macros
+ ---------------------------------------------------------------*/
+// ADC1 Channels
 
-#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_3
-
+#define EXAMPLE_ADC1_CHAN0 ADC_CHANNEL_3
 
 #if (SOC_ADC_PERIPH_NUM >= 2) && !CONFIG_IDF_TARGET_ESP32C3
 /**
  * On ESP32C3, ADC2 is no longer supported, due to its HW limitation.
  * Search for errata on espressif website for more details.
  */
-#define EXAMPLE_USE_ADC2            1
+#define EXAMPLE_USE_ADC2 1
 #endif
 
 #if EXAMPLE_USE_ADC2
-//ADC2 Channels
-#define EXAMPLE_ADC2_CHAN0          ADC_CHANNEL_0
-#endif  //#if EXAMPLE_USE_ADC2
+// ADC2 Channels
+#define EXAMPLE_ADC2_CHAN0 ADC_CHANNEL_0
+#endif // #if EXAMPLE_USE_ADC2
 
-#define EXAMPLE_ADC_ATTEN           ADC_ATTEN_DB_12
+#define EXAMPLE_ADC_ATTEN ADC_ATTEN_DB_12
 
-static int adc_raw[2][10];
-static int voltage[2][10];
-static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
-static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
-void app_main(void)
+
+static void ADC_task(void *arg)
 {
-    xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
+
+    
     //-------------ADC1 Init---------------//
     adc_oneshot_unit_handle_t adc1_handle;
     adc_oneshot_unit_init_cfg_t init_config1 = {
@@ -350,56 +345,97 @@ void app_main(void)
     //-------------ADC1 Config---------------//
     adc_oneshot_chan_cfg_t config = {
         .atten = EXAMPLE_ADC_ATTEN,
-        .bitwidth = ADC_BITWIDTH_DEFAULT, //resolução maxima 12 bits
+        .bitwidth = ADC_BITWIDTH_DEFAULT, // resolução maxima 12 bits
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config));//configura o canal 0 do ADC1
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config)); // configura o canal 0 do ADC1
 
     //-------------ADC1 Calibration Init---------------//
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
-    adc_cali_handle_t adc1_cali_chan1_handle = NULL;
     bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
-    bool do_calibration1_chan1 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN1, EXAMPLE_ADC_ATTEN, &adc1_cali_chan1_handle);
+
+    static int adc_raw;
+    static int voltage;
 
 
-    while (1) {
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
+    while (1)
+    {
+        xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
+
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw));
+        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw);
+
+        if (do_calibration1_chan0)
+        {
+            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
+            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, voltage);
+        }
         
-
-        if (do_calibration1_chan0) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw[0][0], &voltage[0][0]));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, voltage[0][0]);
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN1, &adc_raw[0][1]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN1, adc_raw[0][1]);
-        xQueueSendFromISR(fila_ADC, &adc_raw[0][1], &high_task_awoken);
-
-        if (do_calibration1_chan1) {
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan1_handle, adc_raw[0][1], &voltage[0][1]));
-            ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN1, voltage[0][1]);
-        }
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-
+        xQueueSend(fila_ADC, &voltage, 10);
+    
     }
 
-    //Tear Down
+    // Tear Down
     ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
-    if (do_calibration1_chan0) {
+    if (do_calibration1_chan0)
+    {
         example_adc_calibration_deinit(adc1_cali_chan0_handle);
     }
-    if (do_calibration1_chan1) {
-        example_adc_calibration_deinit(adc1_cali_chan1_handle);
+    // if (do_calibration1_chan1)
+    // {
+    //     example_adc_calibration_deinit(adc1_cali_chan1_handle);
+    // }
+}
+
+//----------------------- Main -------------------------------
+void app_main(void)
+{
+
+    esp_chip_info_t chip_info;
+    uint32_t flash_size;
+    esp_chip_info(&chip_info);
+    ESP_LOGI(TAG, "Este é um microcontrolador %s com %d núcleo(s), %s%s%s%s, ",
+             CONFIG_IDF_TARGET,
+             chip_info.cores,
+             (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "WiFi/" : "",
+             (chip_info.features & CHIP_FEATURE_BT) ? "BT" : "",
+             (chip_info.features & CHIP_FEATURE_BLE) ? "BLE" : "",
+             (chip_info.features & CHIP_FEATURE_IEEE802154) ? ", 802.15.4 (Zigbee/Thread)" : "\n");
+
+    unsigned major_rev = chip_info.revision / 100;
+    unsigned minor_rev = chip_info.revision % 100;
+    ESP_LOGI(TAG, "silicon revision v%d.%d, \n", major_rev, minor_rev);
+    if (esp_flash_get_size(NULL, &flash_size) != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Falha na Obtenção da Memória Flash!");
+        return;
     }
 
+    printf("teste\n");
+    ESP_LOGI(TAG, "Memória Flash: %" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
+             (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
 
+    ESP_LOGI(TAG, "Free heap: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
+
+    ESP_LOGI(TAG, "Versão do ESP-IDF: %s\n", IDF_VER);
+
+    // Criação das filas
+    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    fila_contador = xQueueCreate(10, sizeof(uint32_t));
+    fila_pwm = xQueueCreate(10, sizeof(uint32_t));
+    fila_ADC = xQueueCreate(10, sizeof(int));
+
+    // Criação do semáforo
+    semaphore_pwm = xSemaphoreCreateBinary();
+    semaphore_ADC = xSemaphoreCreateBinary();
+
+    // xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
+    xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
+    xTaskCreate(ADC_task, "Tarefa para o ADC", 4096, NULL, 10, NULL);
 }
 
 /*---------------------------------------------------------------
-        ADC Calibration
----------------------------------------------------------------*/
+            ADC Calibration
+    ---------------------------------------------------------------*/
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
 {
     adc_cali_handle_t handle = NULL;
@@ -407,7 +443,8 @@ static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel,
     bool calibrated = false;
 
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (!calibrated) {
+    if (!calibrated)
+    {
         ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
         adc_cali_curve_fitting_config_t cali_config = {
             .unit_id = unit,
@@ -416,14 +453,16 @@ static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel,
             .bitwidth = ADC_BITWIDTH_DEFAULT,
         };
         ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-        if (ret == ESP_OK) {
+        if (ret == ESP_OK)
+        {
             calibrated = true;
         }
     }
 #endif
 
 #if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (!calibrated) {
+    if (!calibrated)
+    {
         ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
         adc_cali_line_fitting_config_t cali_config = {
             .unit_id = unit,
@@ -431,18 +470,24 @@ static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel,
             .bitwidth = ADC_BITWIDTH_DEFAULT,
         };
         ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-        if (ret == ESP_OK) {
+        if (ret == ESP_OK)
+        {
             calibrated = true;
         }
     }
 #endif
 
     *out_handle = handle;
-    if (ret == ESP_OK) {
+    if (ret == ESP_OK)
+    {
         ESP_LOGI(TAG, "Calibration Success");
-    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
+    }
+    else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
+    {
         ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
-    } else {
+    }
+    else
+    {
         ESP_LOGE(TAG, "Invalid arg or no memory");
     }
 
@@ -460,56 +505,3 @@ static void example_adc_calibration_deinit(adc_cali_handle_t handle)
     ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
 #endif
 }
-
-}
-//----------------------- Main -------------------------------
-void app_main(void)
-{
-
-   
-    esp_chip_info_t chip_info;
-    uint32_t flash_size;
-    esp_chip_info(&chip_info);
-    ESP_LOGI(TAG,"Este é um microcontrolador %s com %d núcleo(s), %s%s%s%s, ",
-           CONFIG_IDF_TARGET,
-           chip_info.cores,
-           (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "WiFi/" : "",
-           (chip_info.features & CHIP_FEATURE_BT) ? "BT" : "",
-           (chip_info.features & CHIP_FEATURE_BLE) ? "BLE" : "",
-           (chip_info.features & CHIP_FEATURE_IEEE802154) ? ", 802.15.4 (Zigbee/Thread)" : "\n");
-
-    unsigned major_rev = chip_info.revision / 100;
-    unsigned minor_rev = chip_info.revision % 100;
-    ESP_LOGI(TAG,"silicon revision v%d.%d, \n", major_rev, minor_rev);
-    if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
-        ESP_LOGE(TAG,"Falha na Obtenção da Memória Flash!");
-       return;
-    }
-
-    printf("teste\n");
-    ESP_LOGI(TAG,"Memória Flash: %" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
-          (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
-
-    ESP_LOGI(TAG,"Free heap: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
-
-    ESP_LOGI(TAG,"Versão do ESP-IDF: %s\n", IDF_VER);
-
-
-    // Criação das filas
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    fila_contador = xQueueCreate(10,sizeof(uint32_t));
-    fila_pwm = xQueueCreate(10,sizeof(uint32_t));
-    fila_ADC = xQueueCreate(10,sizeof(uint32_t));
-    
-    // Criação do semáforo
-    semaphore_pwm = xSemaphoreCreateBinary();
-    semaphore_ADC = xSemaphoreCreateBinary();
-
-    // xTaskCreate(gpio_task_example, "gpio_task_example", 2048, NULL, 10, NULL);
-    xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
-    xTaskCreate(ADC_task, "Tarefa para o ADC", 4096, NULL, 10, NULL);
-}
-
-
-
- 
