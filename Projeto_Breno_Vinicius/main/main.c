@@ -46,7 +46,7 @@
 static const char* TAG = "boot";
 static const char* TAG2 = "botoes";
 static const char* TAG3 = "RELOGIO";
-const static char *TAG = "EXAMPLE";
+const static char *TAG4 = "EXAMPLE";
 
 static QueueHandle_t gpio_evt_queue = NULL;
 QueueHandle_t fila_contador = NULL;
@@ -210,10 +210,15 @@ static void timer_task(void* arg)
                 ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
                 clock.horas, clock.minutos, clock.segundos,
                 dado.contagem_atual, dado.valor_do_alarme);
-
             }
         }
+        if (xQueueReceive(fila_ADC, &voltage[0][0], 10)) {
+    
+             ESP_LOGI(TAG4, "ADC%d Channel[%d] Raw Data: %d", 1, canal 0, voltage[0][0]);
+        }
+        
         xSemaphoreGive(semaphore_pwm);
+        XSemaphoreGive(semaphore_ADC);
             
         }
 
@@ -299,6 +304,8 @@ static void pwm_task(void* arg)
 
     }
 }   
+
+
 //----------------------- ADC -------------------------------
 static void ADC_task(void* arg)
 {
@@ -332,6 +339,7 @@ static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
 void app_main(void)
 {
+    xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
     //-------------ADC1 Init---------------//
     adc_oneshot_unit_handle_t adc1_handle;
     adc_oneshot_unit_init_cfg_t init_config1 = {
@@ -357,6 +365,7 @@ void app_main(void)
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
         ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
         
+
         if (do_calibration1_chan0) {
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw[0][0], &voltage[0][0]));
             ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, voltage[0][0]);
@@ -365,6 +374,8 @@ void app_main(void)
 
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN1, &adc_raw[0][1]));
         ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN1, adc_raw[0][1]);
+        xQueueSendFromISR(fila_ADC, &adc_raw[0][1], &high_task_awoken);
+
         if (do_calibration1_chan1) {
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan1_handle, adc_raw[0][1], &voltage[0][1]));
             ESP_LOGI(TAG, "ADC%d Channel[%d] Cali Voltage: %d mV", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN1, voltage[0][1]);
@@ -488,6 +499,7 @@ void app_main(void)
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     fila_contador = xQueueCreate(10,sizeof(uint32_t));
     fila_pwm = xQueueCreate(10,sizeof(uint32_t));
+    fila_ADC = xQueueCreate(10,sizeof(uint32_t));
     
     // Criação do semáforo
     semaphore_pwm = xSemaphoreCreateBinary();
