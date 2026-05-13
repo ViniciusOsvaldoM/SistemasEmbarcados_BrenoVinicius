@@ -306,7 +306,8 @@ static void ADC_task(void* arg)
         ADC General Macros
 ---------------------------------------------------------------*/
 //ADC1 Channels
-#define EXAMPLE_ADC1_CHAN0          32;
+
+#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_3
 
 
 #if (SOC_ADC_PERIPH_NUM >= 2) && !CONFIG_IDF_TARGET_ESP32C3
