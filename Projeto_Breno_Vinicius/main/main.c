@@ -61,7 +61,7 @@
  ---------------------------------------------------------------*/
 // ADC1 Channels
 
-#define EXAMPLE_ADC1_CHAN0 ADC_CHANNEL_3
+    #define EXAMPLE_ADC1_CHAN0 ADC_CHANNEL_3
 
 #define EXAMPLE_ADC_ATTEN ADC_ATTEN_DB_12
 
@@ -151,7 +151,7 @@ static void gpio_task(void *arg)
     {
         if (xQueueReceive(fila_gpio, &io_num, 10))
         {
-            int level = gpio_get_level(io_num);
+            
             if (io_num == BOTAO1)
             {
                 gpio_set_level(LED_ESP, 1);
@@ -235,7 +235,7 @@ static void timer_task(void *arg)
 
     relogio_t clock = {0, 0, 0};
     uint64_t segundos_totais = 0;
-    int voltage;
+    int tensao;
     for (;;)
     {
         if (xQueueReceive(fila_contador, &dado, 10))
@@ -253,10 +253,10 @@ static void timer_task(void *arg)
                          dado.contagem_atual, dado.valor_do_alarme);
             }
         }
-        if (xQueueReceive(fila_ADC, &voltage, 10))
+        if (xQueueReceive(fila_ADC, &tensao, 10))
         {
 
-            ESP_LOGI(TAG4, "ADC1 Channel[0] Raw Data: %d", voltage);
+            ESP_LOGI(TAG4, "ADC1 Channel[0] tensao calibrada: %d mV", tensao);
         }
 
         xSemaphoreGive(semaphore_pwm);
@@ -308,20 +308,20 @@ static void pwm_task(void *arg)
         xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
         xQueueReceiveFromISR(fila_pwm, &duty, NULL);
 
-        if (duty == 1)
+        if (duty == BOTAO1)
         {
             manual = false;
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
         }
-        else if (duty == 2)
+        else if (duty == BOTAO2)
         {
             intensidade = 0;
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
             manual = true;
         }
-        else if (duty == 3 && manual == true)
+        else if (duty == BOTAO3 && manual == true)
         {
             intensidade += 100;
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
@@ -348,25 +348,25 @@ static void ADC_task(void *arg)
         .bitwidth = ADC_BITWIDTH_DEFAULT, // resolução maxima 12 bits
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config)); // configura o canal 0 do ADC1
+    static int adc_raw;
+    static int voltage;
+ 
 
     //-------------ADC1 Calibration Init---------------//
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
     bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
-
-    static int adc_raw;
-    static int voltage;
-
 
     for (;;)
     {
         xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
 
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw));
-
+        ESP_LOGI(TAG4, "ADC1 Channel[0] adc_raw: %d ", adc_raw);
         if (do_calibration1_chan0)
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
         
         xQueueSend(fila_ADC, &voltage, 10);
+    
     
     }
 
@@ -376,6 +376,7 @@ static void ADC_task(void *arg)
     {
         example_adc_calibration_deinit(adc1_cali_chan0_handle);
     }
+    
 }
 
 //----------------------- Main -------------------------------
@@ -425,7 +426,6 @@ void app_main(void)
     xTaskCreate(ADC_task, "Tarefa para o ADC", 4096, NULL, 10, NULL);
     xTaskCreate(pwm_task, "Tarefa para o PWM", 4096, NULL, 10, NULL);
     
-
 }
 
 /*---------------------------------------------------------------
