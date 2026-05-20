@@ -99,6 +99,12 @@ typedef struct
     int segundos;
 } relogio_t;
 
+typedef struct
+{
+    int raw;
+    int multimetro;
+} tensao_t;
+
 //----------------------- Interrupção GPIO -------------------------------
 static void IRAM_ATTR gpio_isr_handler(void *arg)
 {
@@ -195,7 +201,7 @@ static bool IRAM_ATTR timer_alarme(gptimer_handle_t timer, const gptimer_alarm_e
 
     // reconfigure alarm value
     gptimer_alarm_config_t alarm_config = {
-        .alarm_count = edata->count_value + 1000000, // alarm in next 1s
+        .alarm_count = edata->count_value + 100000, // alarm in next 1s
     };
     gptimer_set_alarm_action(timer, &alarm_config);
     // return whether we need to yield at the end of ISR
@@ -235,10 +241,10 @@ static void timer_task(void *arg)
 
     relogio_t clock = {0, 0, 0};
     uint64_t segundos_totais = 0;
-    int tensao;
+    tensao_t tensao;
     for (;;)
     {
-        if (xQueueReceive(fila_contador, &dado, 10))
+        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
         {
             segundos_totais = dado.contagem_atual / 1000000;
             clock.horas = (segundos_totais / 3600) % 24;
@@ -256,7 +262,7 @@ static void timer_task(void *arg)
         if (xQueueReceive(fila_ADC, &tensao, 10))
         {
 
-            ESP_LOGI(TAG4, "ADC1 Channel[0] tensao calibrada: %d mV", tensao);
+            ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
         }
 
         xSemaphoreGive(semaphore_pwm);
@@ -313,12 +319,16 @@ static void pwm_task(void *arg)
             manual = false;
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 8000);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
         }
         else if (duty == BOTAO2)
         {
             intensidade = 0;
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
             manual = true;
         }
         else if (duty == BOTAO3 && manual == true)
@@ -326,6 +336,8 @@ static void pwm_task(void *arg)
             intensidade += 100;
             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
         }
     }
 }
@@ -348,27 +360,37 @@ static void ADC_task(void *arg)
         .bitwidth = ADC_BITWIDTH_DEFAULT, // resolução maxima 12 bits
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config)); // configura o canal 0 do ADC1
-    static int adc_raw;
-    static int voltage;
- 
+    
+    
+
 
     //-------------ADC1 Calibration Init---------------//
     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
     bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
+       static int adc_raw;
+       static int voltage; 
 
+    tensao_t tensao;
+     
+   
     for (;;)
     {
         xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
 
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw));
-        ESP_LOGI(TAG4, "ADC1 Channel[0] adc_raw: %d ", adc_raw);
+
         if (do_calibration1_chan0)
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
-        
-        xQueueSend(fila_ADC, &voltage, 10);
+         ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
+        xQueueSend(fila_ADC, &tensao, 10);
+
+        tensao.raw = adc_raw;
+        tensao.multimetro = voltage;
     
     
     }
+
+    
 
     // Tear Down
     ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
@@ -414,7 +436,7 @@ void app_main(void)
     fila_gpio = xQueueCreate(10, sizeof(uint32_t));
     fila_contador = xQueueCreate(10, sizeof(uint32_t));
     fila_pwm = xQueueCreate(10, sizeof(uint32_t));
-    fila_ADC = xQueueCreate(10, sizeof(int));
+    fila_ADC = xQueueCreate(10, sizeof(tensao_t));
 
     // Criação do semáforo
     semaphore_pwm = xSemaphoreCreateBinary();
