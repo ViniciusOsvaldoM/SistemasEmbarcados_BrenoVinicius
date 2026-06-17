@@ -90,7 +90,6 @@
 //----------------------- PWM -------------------------------
 #define LEDC_TIMER LEDC_TIMER_0
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define LED_PWM (16)      // Define the output GPIO PWM
 #define OSCILOSCOPIO (33) // Define the output GPIO
 #define LED_CHANNEL LEDC_CHANNEL_0
 #define OSCILOSCOPIO_CHANNEL LEDC_CHANNEL_1
@@ -195,7 +194,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     esp_mqtt_event_handle_t event = event_data;
     esp_mqtt_client_handle_t client = event->client;
     int msg_id;
-    cor_t cor;
+
     switch ((esp_mqtt_event_id_t)event_id)
     {
     case MQTT_EVENT_CONNECTED:
@@ -218,46 +217,55 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
         ESP_LOGI(TAG6, "sent unsubscribe successful, msg_id=%d", msg_id);
         break;
-    case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGI(TAG6, "MQTT_EVENT_DISCONNECTED");
-        break;
+    // case MQTT_EVENT_DISCONNECTED:
+    //     ESP_LOGI(TAG6, "MQTT_EVENT_DISCONNECTED");
+    //     break;
 
-    case MQTT_EVENT_SUBSCRIBED:
-        ESP_LOGI(TAG6, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-        msg_id = esp_mqtt_client_publish(client, "green", "data", 0, 0, 0);
-        ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+    // case MQTT_EVENT_SUBSCRIBED:
+    //     ESP_LOGI(TAG6, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+    //     msg_id = esp_mqtt_client_publish(client, "green", "data", 0, 0, 0);
+    //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_publish(client, "blue", "data", 0, 0, 0);
-        ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+    //     msg_id = esp_mqtt_client_publish(client, "blue", "data", 0, 0, 0);
+    //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
 
-        msg_id = esp_mqtt_client_publish(client, "red", "data", 0, 0, 0);
-        ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
-       
-        break;
+    //     msg_id = esp_mqtt_client_publish(client, "red", "data", 0, 0, 0);
+    //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+
+    //    break;
     case MQTT_EVENT_UNSUBSCRIBED:
         ESP_LOGI(TAG6, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
         break;
-    case MQTT_EVENT_PUBLISHED:
-        ESP_LOGI(TAG6, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
-        break;
+        // case MQTT_EVENT_PUBLISHED:
+        //     ESP_LOGI(TAG6, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+        //     break;
     case MQTT_EVENT_DATA:
         ESP_LOGI(TAG6, "MQTT_EVENT_DATA");
         printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
         printf("DATA=%.*s\r\n", event->data_len, event->data);
         // converte event->data para inteiro e envia para a fila
         // respeitar o event->data_len para evitar problemas de buffer overflow
-        //como distinguir os tópicos? usar event->topic para isso
+        // como distinguir os tópicos? usar event->topic para isso
+        static cor_t cor;
+
+        char data1[5];
+        snprintf(data1, event->data_len + 1, "%.*s", event->data_len, event->data);
+        int value = atoi(data1);
+
         if (strncmp(event->topic, "green", event->topic_len) == 0)
         {
-            cor.green = atoi(event->data);
+            cor.green = value;
+            printf("Green: %d\n", cor.green);
         }
         else if (strncmp(event->topic, "blue", event->topic_len) == 0)
         {
-            cor.blue = atoi(event->data);
+            cor.blue = value;
+            printf("Blue: %d\n", cor.blue);
         }
         else if (strncmp(event->topic, "red", event->topic_len) == 0)
         {
-            cor.red = atoi(event->data);
+            cor.red = value;
+            printf("Red: %d\n", cor.red);
         }
 
         xQueueSend(fila_Mqtt_cor, &cor, 10);
@@ -665,6 +673,7 @@ static void timer_task(void *arg)
     relogio_t clock = {0, 0, 0};
     uint64_t segundos_totais = 0;
     tensao_t tensao;
+    static int contador = 0;
 
     for (;;)
     {
@@ -677,17 +686,21 @@ static void timer_task(void *arg)
 
             if (segundos_totais != ultimo_log)
             {
-                ultimo_log = segundos_totais;
-                ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
-                         clock.horas, clock.minutos, clock.segundos,
-                         dado.contagem_atual, dado.valor_do_alarme);
+                if (contador % 10 == 0)
+                {
+                    ultimo_log = segundos_totais;
+                    ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
+                             clock.horas, clock.minutos, clock.segundos,
+                             dado.contagem_atual, dado.valor_do_alarme);
+                }
             }
         }
         xQueueSend(fila_I2C, &clock, 10);
         if (xQueueReceive(fila_ADC, &tensao, 10))
         {
-
-            ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
+            contador++;
+            if (contador % 10 == 0)
+                ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
         }
 
         xSemaphoreGive(semaphore_pwm);
@@ -719,7 +732,7 @@ static void pwm_task(void *arg)
         .channel = LEDC_CHANNEL_0,
         .timer_sel = LEDC_TIMER,
         .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = LED_PWM,
+        .gpio_num = GPIO_NUM_16,
         .duty = 0, // Set duty to 0%
         .hpoint = 0};
 
@@ -742,7 +755,7 @@ static void pwm_task(void *arg)
         .channel = LEDC_CHANNEL_2,
         .timer_sel = LEDC_TIMER,
         .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = GPIO_NUM_16,
+        .gpio_num = GPIO_NUM_26,
         .duty = 0, // Set duty to 0%
         .hpoint = 0};
     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
@@ -755,53 +768,70 @@ static void pwm_task(void *arg)
         .channel = LEDC_CHANNEL_3,
         .timer_sel = LEDC_TIMER,
         .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = GPIO_NUM_26,
+        .gpio_num = GPIO_NUM_17,
         .duty = 0, // Set duty to 0%
         .hpoint = 0};
     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_R_channel));
-    
-    
+
     for (;;)
     {
         xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
         xQueueReceiveFromISR(fila_pwm, &duty, NULL);
         xQueueReceive(fila_Mqtt_cor, &cor, 10);
-        
 
-        // if (duty == BOTAO1)
-        // {
-        //     manual = false;
-        //     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
-        //     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-        //     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 8000);
-        //     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-        // }
-        // else if (duty == BOTAO2)
-        // {
-        //     intensidade = 0;
-        //     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
-        //     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-        //     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
-        //     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-        //     manual = true;
-       // }
-        //else if (duty == BOTAO3 && manual == true)
-        //{
-            green = cor.green;
-            blue = cor.blue;    
-            red = cor.red;
-
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, green);
+        if (duty == BOTAO1)
+        {
+            manual = false;
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, green);
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 8000);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+            manual = false;
 
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, blue);
+            printf("-------------------- 11111111111111111 --------------------\n");
+        }
+        else if (duty == BOTAO2)
+        {
+            intensidade = 0;
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
+            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, intensidade);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, red);
+            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, intensidade);
             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
-        //}
+
+            printf("-------------------- 222222222222222222 --------------------\n");
+
+            manual = false;
+        }
+
+        else if (duty == BOTAO3)
+        {
+            if (xQueueReceive(fila_Mqtt_cor, &cor, 10))
+            {
+                green = cor.green;
+                blue = cor.blue;
+                red = cor.red;
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, green);
+                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+
+                printf("-------------------- 333333333333333333 --------------------\n");
+
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, green);
+                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, blue);
+                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
+                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, red);
+                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
+            }
+        }
+        else
+        {
+            printf("-------------------- xxxxxxxxxxxxxxxxxx --------------------\n");
+        }
     }
 }
 
@@ -838,9 +868,9 @@ static void ADC_task(void *arg)
 
         if (do_calibration1_chan0)
             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
-        ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
+        // ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
         xQueueSend(fila_ADC, &tensao, 10);
-        //xQueueSend(fila_I2C, &tensao, 10);
+        // xQueueSend(fila_I2C, &tensao, 10);
         tensao.raw = adc_raw;
         tensao.multimetro = voltage;
     }
@@ -916,7 +946,6 @@ void app_main(void)
     fila_ADC = xQueueCreate(10, sizeof(tensao_t));
     fila_I2C = xQueueCreate(10, sizeof(relogio_t));
     fila_Mqtt_cor = xQueueCreate(10, sizeof(cor_t));
-    
 
     // Criação do semáforo
     semaphore_pwm = xSemaphoreCreateBinary();
