@@ -132,7 +132,7 @@ static const char *TAG6 = "Mqtt";
 static const char *TAG7 = "sntp";
 //----------------------- Filas -------------------------------
 static QueueHandle_t fila_gpio = NULL;
-static QueueHandle_t fila_contador = NULL;
+static QueueHandle_t fila_relogio = NULL;
 static QueueHandle_t fila_pwm = NULL;
 static QueueHandle_t fila_ADC = NULL;
 static QueueHandle_t fila_I2C = NULL;
@@ -831,275 +831,272 @@ static void gpio_task(void *arg)
     }
 }
 
-/* ----------------------- Alarme do timer ------------------------------- */
+// /* ----------------------- Alarme do timer ------------------------------- */
 
-static bool IRAM_ATTR timer_alarme(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
-{
-    static uint64_t contagem = 0;
-    uint64_t alarme = edata->count_value;
+// static bool IRAM_ATTR timer_alarme(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
+// {
+//     static uint64_t contagem = 0;
+//     uint64_t alarme = edata->count_value;
 
-    contagem += alarme;
-    acumulador_t ele = {
-        .contagem_atual = contagem,
-        .valor_do_alarme = alarme};
+//     contagem += alarme;
+//     acumulador_t ele = {
+//         .contagem_atual = contagem,
+//         .valor_do_alarme = alarme};
 
-    BaseType_t high_task_awoken = pdFALSE;
+//     BaseType_t high_task_awoken = pdFALSE;
 
-    xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
+//     xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
 
-    // reconfigure alarm value
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = edata->count_value + 100000, // alarm in next 1s
-    };
-    gptimer_set_alarm_action(timer, &alarm_config);
-    // return whether we need to yield at the end of ISR
-    return (high_task_awoken == pdTRUE);
-}
+//     // reconfigure alarm value
+//     gptimer_alarm_config_t alarm_config = {
+//         .alarm_count = edata->count_value + 100000, // alarm in next 1s
+//     };
+//     gptimer_set_alarm_action(timer, &alarm_config);
+//     // return whether we need to yield at the end of ISR
+//     return (high_task_awoken == pdTRUE);
+// }
 
-/* ----------------------- Tarefa do gptimer ------------------------------- */
-static void timer_task(void *arg)
-{
-    uint64_t ultimo_log = 0;
-    acumulador_t dado;
-    dado.contagem_atual = 0;
-    dado.valor_do_alarme = 0;
+// /* ----------------------- Tarefa do gptimer ------------------------------- */
+// static void timer_task(void *arg)
+// {
+//     uint64_t ultimo_log = 0;
+//     acumulador_t dado;
+//     dado.contagem_atual = 0;
+//     dado.valor_do_alarme = 0;
 
-    ESP_LOGI(TAG3, "Create timer handle");
-    gptimer_handle_t gptimer = NULL;
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
-    };
+//     ESP_LOGI(TAG3, "Create timer handle");
+//     gptimer_handle_t gptimer = NULL;
+//     gptimer_config_t timer_config = {
+//         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+//         .direction = GPTIMER_COUNT_UP,
+//         .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+//     };
 
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+//     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = timer_alarme,
-    };
+//     gptimer_event_callbacks_t cbs = {
+//         .on_alarm = timer_alarme,
+//     };
 
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
-    ESP_LOGI(TAG3, "Enable timer");
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
+//     ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+//     ESP_LOGI(TAG3, "Enable timer");
+//     ESP_ERROR_CHECK(gptimer_enable(gptimer));
 
-    ESP_LOGI(TAG3, "Start timer, update alarm value dynamically");
-    gptimer_alarm_config_t alarm_config3 = {
-        .alarm_count = 1000000, // period = 1s
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
+//     ESP_LOGI(TAG3, "Start timer, update alarm value dynamically");
+//     gptimer_alarm_config_t alarm_config3 = {
+//         .alarm_count = 1000000, // period = 1s
+//     };
+//     ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
+//     ESP_ERROR_CHECK(gptimer_start(gptimer));
 
-    relogio_t clock = {0, 0, 0};
-    uint64_t segundos_totais = 0;
-    tensao_t tensao;
-    static int contador = 0;
+//     relogio_t clock = {0, 0, 0};
+//     uint64_t segundos_totais = 0;
+//     tensao_t tensao;
+//     static int contador = 0;
 
-    for (;;)
-    {
-        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
-        {
-            segundos_totais = dado.contagem_atual / 1000000;
-            clock.horas = (segundos_totais / 3600) % 24;
-            clock.minutos = (segundos_totais / 60) % 60;
-            clock.segundos = segundos_totais % 60;
+//     for (;;)
+//     {
+//         if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
+//         {
+//             segundos_totais = dado.contagem_atual / 1000000;
+//             clock.horas = (segundos_totais / 3600) % 24;
+//             clock.minutos = (segundos_totais / 60) % 60;
+//             clock.segundos = segundos_totais % 60;
 
-            if (segundos_totais != ultimo_log)
-            {
-                if (contador % 10 == 0)
-                {
-                    ultimo_log = segundos_totais;
-                    ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
-                             clock.horas, clock.minutos, clock.segundos,
-                             dado.contagem_atual, dado.valor_do_alarme);
-                }
-            }
-        }
-                if (xQueueReceive(fila_ADC, &tensao, 10))
-        {
-            contador++;
-            if (contador % 10 == 0)
-                ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
-        }
+//             if (segundos_totais != ultimo_log)
+//             {
+//                 if (contador % 10 == 0)
+//                 {
+//                     ultimo_log = segundos_totais;
+//                     ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
+//                              clock.horas, clock.minutos, clock.segundos,
+//                              dado.contagem_atual, dado.valor_do_alarme);
+//                 }
+//             }
+//         }
+//                 if (xQueueReceive(fila_ADC, &tensao, 10))
+//         {
+//             contador++;
+//             if (contador % 10 == 0)
+//                 ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
+//         }
 
-        xSemaphoreGive(semaphore_pwm);
-        xSemaphoreGive(semaphore_ADC);
-    }
-}
+//         xSemaphoreGive(semaphore_pwm);
+//         xSemaphoreGive(semaphore_ADC);
+//     }
+// }
 
-/* ----------------------- Tarefa do PWM ------------------------------- */
-static void pwm_task(void *arg)
-{
+// /* ----------------------- Tarefa do PWM ------------------------------- */
+// static void pwm_task(void *arg)
+// {
+//     int duty;
+//     bool manual = false;
+//     int intensidade;
+//     int green, blue, red;
+//     cor_t cor;
+//     // Prepare and then apply the LEDC PWM timer configuration
+//     ledc_timer_config_t ledc_timer = {
+//         .speed_mode = LEDC_MODE,
+//         .duty_resolution = LEDC_DUTY_RES,
+//         .timer_num = LEDC_TIMER,
+//         .freq_hz = LEDC_FREQUENCY, // Set output frequency at 5 kHz
+//         .clk_cfg = LEDC_AUTO_CLK};
+//     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-    int duty;
-    bool manual = false;
-    int intensidade;
-    int green, blue, red;
-    cor_t cor;
-    // Prepare and then apply the LEDC PWM timer configuration
-    ledc_timer_config_t ledc_timer = {
-        .speed_mode = LEDC_MODE,
-        .duty_resolution = LEDC_DUTY_RES,
-        .timer_num = LEDC_TIMER,
-        .freq_hz = LEDC_FREQUENCY, // Set output frequency at 5 kHz
-        .clk_cfg = LEDC_AUTO_CLK};
-    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+//     // Prepare and then apply the LEDC PWM channel configuration
+//     ledc_channel_config_t led_channel = {
+//         .speed_mode = LEDC_MODE,
+//         .channel = LEDC_CHANNEL_0,
+//         .timer_sel = LEDC_TIMER,
+//         .intr_type = LEDC_INTR_DISABLE,
+//         .gpio_num = GPIO_NUM_16,
+//         .duty = 0, // Set duty to 0%
+//         .hpoint = 0};
 
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t led_channel = {
-        .speed_mode = LEDC_MODE,
-        .channel = LEDC_CHANNEL_0,
-        .timer_sel = LEDC_TIMER,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = GPIO_NUM_16,
-        .duty = 0, // Set duty to 0%
-        .hpoint = 0};
+//     // Prepare and then apply the LEDC PWM channel configuration
+//     ledc_channel_config_t mqtt_G_channel = {
+//         .speed_mode = LEDC_MODE,
+//         .channel = LEDC_CHANNEL_1,
+//         .timer_sel = LEDC_TIMER,
+//         .intr_type = LEDC_INTR_DISABLE,
+//         .gpio_num = OSCILOSCOPIO,
+//         .duty = 0, // Set duty to 0%
+//         .hpoint = 0};
+//     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
+//     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_G_channel));
 
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t mqtt_G_channel = {
-        .speed_mode = LEDC_MODE,
-        .channel = LEDC_CHANNEL_1,
-        .timer_sel = LEDC_TIMER,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = OSCILOSCOPIO,
-        .duty = 0, // Set duty to 0%
-        .hpoint = 0};
-    ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-    ESP_ERROR_CHECK(ledc_channel_config(&mqtt_G_channel));
+//     // canal 2 pwm
+//     // Prepare and then apply the LEDC PWM channel configuration
+//     ledc_channel_config_t mqtt_B_channel = {
+//         .speed_mode = LEDC_MODE,
+//         .channel = LEDC_CHANNEL_2,
+//         .timer_sel = LEDC_TIMER,
+//         .intr_type = LEDC_INTR_DISABLE,
+//         .gpio_num = GPIO_NUM_26,
+//         .duty = 0, // Set duty to 0%
+//         .hpoint = 0};
+//     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
+//     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_B_channel));
 
-    // canal 2 pwm
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t mqtt_B_channel = {
-        .speed_mode = LEDC_MODE,
-        .channel = LEDC_CHANNEL_2,
-        .timer_sel = LEDC_TIMER,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = GPIO_NUM_26,
-        .duty = 0, // Set duty to 0%
-        .hpoint = 0};
-    ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-    ESP_ERROR_CHECK(ledc_channel_config(&mqtt_B_channel));
+//     // canal 3 pwm
+//     // Prepare and then apply the LEDC PWM channel configuration
+//     ledc_channel_config_t mqtt_R_channel = {
+//         .speed_mode = LEDC_MODE,
+//         .channel = LEDC_CHANNEL_3,
+//         .timer_sel = LEDC_TIMER,
+//         .intr_type = LEDC_INTR_DISABLE,
+//         .gpio_num = GPIO_NUM_17,
+//         .duty = 0, // Set duty to 0%
+//         .hpoint = 0};
+//     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
+//     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_R_channel));
 
-    // canal 3 pwm
-    // Prepare and then apply the LEDC PWM channel configuration
-    ledc_channel_config_t mqtt_R_channel = {
-        .speed_mode = LEDC_MODE,
-        .channel = LEDC_CHANNEL_3,
-        .timer_sel = LEDC_TIMER,
-        .intr_type = LEDC_INTR_DISABLE,
-        .gpio_num = GPIO_NUM_17,
-        .duty = 0, // Set duty to 0%
-        .hpoint = 0};
-    ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-    ESP_ERROR_CHECK(ledc_channel_config(&mqtt_R_channel));
+//     for (;;)
+//     {
+//         xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
+//         xQueueReceiveFromISR(fila_pwm, &duty, NULL);
+//         xQueueReceive(fila_Mqtt_cor, &cor, 10);
 
-    for (;;)
-    {
-        xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
-        xQueueReceiveFromISR(fila_pwm, &duty, NULL);
-        xQueueReceive(fila_Mqtt_cor, &cor, 10);
+//         if (duty == BOTAO1)
+//         {
+//             manual = false;
+//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
+//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 8000);
+//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+//             manual = false;
 
-        if (duty == BOTAO1)
-        {
-            manual = false;
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 8000);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-            manual = false;
+//             printf("-------------------- 11111111111111111 --------------------\n");
+//         }
+//         else if (duty == BOTAO2)
+//         {
+//             intensidade = 0;
+//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
+//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
+//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, intensidade);
+//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
+//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, intensidade);
+//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
 
-            printf("-------------------- 11111111111111111 --------------------\n");
-        }
-        else if (duty == BOTAO2)
-        {
-            intensidade = 0;
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, intensidade);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
-            ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, intensidade);
-            ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
+//             printf("-------------------- 222222222222222222 --------------------\n");
 
-            printf("-------------------- 222222222222222222 --------------------\n");
+//             manual = false;
+//         }
 
-            manual = false;
-        }
+//         else if (duty == BOTAO3)
+//         {
+//             if (xQueueReceive(fila_Mqtt_cor, &cor, 10))
+//             {
+//                 green = cor.green;
+//                 blue = cor.blue;
+//                 red = cor.red;
+//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, green);
+//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
 
-        else if (duty == BOTAO3)
-        {
-            if (xQueueReceive(fila_Mqtt_cor, &cor, 10))
-            {
-                green = cor.green;
-                blue = cor.blue;
-                red = cor.red;
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, green);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
+//                 printf("-------------------- 333333333333333333 --------------------\n");
 
-                printf("-------------------- 333333333333333333 --------------------\n");
+//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, green);
+//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
+//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, blue);
+//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
+//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, red);
+//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
+//             }
+//         }
+//         else
+//         {
+//             printf("-------------------- xxxxxxxxxxxxxxxxxx --------------------\n");
+//         }
+//     }
+// }
 
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, green);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, blue);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
-                ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, red);
-                ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
-            }
-        }
-        else
-        {
-            printf("-------------------- xxxxxxxxxxxxxxxxxx --------------------\n");
-        }
-    }
-}
+// static void ADC_task(void *arg)
+// {
+//     //-------------ADC1 Init---------------//
+//     adc_oneshot_unit_handle_t adc1_handle;
+//     adc_oneshot_unit_init_cfg_t init_config1 = {
+//         .unit_id = ADC_UNIT_1,
+//     };
+//     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
 
-static void ADC_task(void *arg)
-{
+//     //-------------ADC1 Config---------------//
+//     adc_oneshot_chan_cfg_t config = {
+//         .atten = EXAMPLE_ADC_ATTEN,
+//         .bitwidth = ADC_BITWIDTH_DEFAULT, // resolução maxima 12 bits
+//     };
+//     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config)); // configura o canal 0 do ADC1
 
-    //-------------ADC1 Init---------------//
-    adc_oneshot_unit_handle_t adc1_handle;
-    adc_oneshot_unit_init_cfg_t init_config1 = {
-        .unit_id = ADC_UNIT_1,
-    };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+//     //-------------ADC1 Calibration Init---------------//
+//     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
+//     bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
+//     static int adc_raw;
+//     static int voltage;
+//     tensao_t tensao;
 
-    //-------------ADC1 Config---------------//
-    adc_oneshot_chan_cfg_t config = {
-        .atten = EXAMPLE_ADC_ATTEN,
-        .bitwidth = ADC_BITWIDTH_DEFAULT, // resolução maxima 12 bits
-    };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config)); // configura o canal 0 do ADC1
+//     for (;;)
+//     {
+//         xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
 
-    //-------------ADC1 Calibration Init---------------//
-    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
-    bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
-    static int adc_raw;
-    static int voltage;
+//         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw));
 
-    tensao_t tensao;
+//         if (do_calibration1_chan0)
+//             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
+//         // ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
+//         xQueueSend(fila_ADC, &tensao, 10);
+//         // xQueueSend(fila_I2C, &tensao, 10);
+//         tensao.raw = adc_raw;
+//         tensao.multimetro = voltage;
+//     }
 
-    for (;;)
-    {
-        xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
-
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw));
-
-        if (do_calibration1_chan0)
-            ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
-        // ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
-        xQueueSend(fila_ADC, &tensao, 10);
-        // xQueueSend(fila_I2C, &tensao, 10);
-        tensao.raw = adc_raw;
-        tensao.multimetro = voltage;
-    }
-
-    // Tear Down
-    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
-    if (do_calibration1_chan0)
-    {
-        example_adc_calibration_deinit(adc1_cali_chan0_handle);
-    }
-}
+//     // Tear Down
+//     ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
+//     if (do_calibration1_chan0)
+//     {
+//         example_adc_calibration_deinit(adc1_cali_chan0_handle);
+//     }
+// }
 
 //----------------------- Main -------------------------------
 void app_main(void)

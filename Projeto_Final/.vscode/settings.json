@@ -1,19 +1,6 @@
 {
-  "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPathWin": "c:\\Users\\Public\\ESP\\dist\\v5.5.3\\esp-idf",
-  "idf.pythonInstallPath": "c:\\Users\\Public\\ESP2\\tools\\idf-python\\3.11.2\\python.exe",
-  "idf.openOcdConfigs": [
-    "board/esp32-wrover-kit-3.3v.cfg"
-  ],
-  "idf.portWin": "COM4",
-  "idf.toolsPathWin": "c:\\Users\\Public\\ESP2",
-  "idf.customExtraVars": {
-    "IDF_TARGET": "esp32"
-  },
-  "clangd.path": "c:\\Users\\Public\\ESP2\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
-  "clangd.arguments": [
-    "--background-index",
-    "--query-driver=c:\\Users\\Public\\ESP2\\tools\\xtensa-esp-elf\\esp-14.2.0_20251107\\xtensa-esp-elf\\bin\\xtensa-esp32-elf-gcc.exe",
-    "--compile-commands-dir=${workspaceFolder}\\build"
-  ]
+    "idf.espIdfPathWin": "c:\\Users\\sistemembarcados\\esp\\v5.5.3\\esp-idf",
+    "idf.toolsPathWin": "c:\\Users\\sistemembarcados",
+    "idf.pythonInstallPath": "c:\\Users\\sistemembarcados\\tools\\idf-python\\3.11.2\\python.exe",
+    "idf.portWin": "COM9"
 }
