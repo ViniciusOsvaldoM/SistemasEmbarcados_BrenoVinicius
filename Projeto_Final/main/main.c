@@ -1111,8 +1111,6 @@ void app_main(void)
 
     xTaskCreate(gpio_task, "Tarefa para o GPIO", 4096, NULL, 10, NULL);
     xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
-    // xTaskCreate(ADC_task, "Tarefa para o ADC", 4096, NULL, 10, NULL);
-    // xTaskCreate(pwm_task, "Tarefa para o PWM", 4096, NULL, 10, NULL);
     xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
     xTaskCreate(example_display_port_task, "LVGL do Display", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
 
