@@ -1,3 +1,10 @@
 idf_component_register(SRCS "main.c"
-                       PRIV_REQUIRES spi_flash
-                       INCLUDE_DIRS "")
+                       INCLUDE_DIRS "."
+                       PRIV_REQUIRES 
+                            spi_flash
+                            esp_adc
+                            nvs_flash
+                            esp_event
+                            esp_netif
+                            mqtt)
+

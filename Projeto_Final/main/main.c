@@ -55,6 +55,8 @@
 #include "lwip/ip_addr.h"
 #include "esp_sntp.h"
 
+
+#define CONFIG_SNTP_TIME_SERVER "pool.ntp.org"
 //------------------------sntp-------------------------------
 #ifndef INET6_ADDRSTRLEN
 #define INET6_ADDRSTRLEN 48
@@ -132,11 +134,13 @@ static const char *TAG6 = "Mqtt";
 static const char *TAG7 = "sntp";
 //----------------------- Filas -------------------------------
 static QueueHandle_t fila_gpio = NULL;
-static QueueHandle_t fila_relogio = NULL;
+static QueueHandle_t fila_contador = NULL;
 static QueueHandle_t fila_pwm = NULL;
 static QueueHandle_t fila_ADC = NULL;
 static QueueHandle_t fila_I2C = NULL;
 static QueueHandle_t fila_Mqtt_cor = NULL;
+static QueueHandle_t fila_horario = NULL;
+
 
 //----------------------- Semáforos -------------------------------
 static SemaphoreHandle_t semaphore_ADC = NULL;
@@ -172,6 +176,7 @@ typedef struct
     int blue;
     int red;
 } cor_t;
+
 //-----------------------sntp-------------------------------
 /* LwIP SNTP example
 
@@ -205,68 +210,6 @@ void time_sync_notification_cb(struct timeval *tv)
     ESP_LOGI(TAG7, "Notification of a time synchronization event");
 }
 
-void app_main(void)
-{
-    ++boot_count;
-    ESP_LOGI(TAG7, "Boot count: %d", boot_count);
-
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
-    if (timeinfo.tm_year < (2016 - 1900)) {
-        ESP_LOGI(TAG7, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-        obtain_time();
-        // update 'now' variable with current time
-        time(&now);
-    }
-#ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
-    else {
-        // add 500 ms error to the current system time.
-        // Only to demonstrate a work of adjusting method!
-        {
-            ESP_LOGI(TAG7, "Add a error for test adjtime");
-            struct timeval tv_now;
-            gettimeofday(&tv_now, NULL);
-            int64_t cpu_time = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
-            int64_t error_time = cpu_time + 500 * 1000L;
-            struct timeval tv_error = { .tv_sec = error_time / 1000000L, .tv_usec = error_time % 1000000L };
-            settimeofday(&tv_error, NULL);
-        }
-
-        ESP_LOGI(TAG7, "Time was set, now just adjusting it. Use SMOOTH SYNC method.");
-        obtain_time();
-        // update 'now' variable with current time
-        time(&now);
-    }
-#endif
-
-    char strftime_buf[64];
-
-    // Set timezone to Brasil Standard Time
-    setenv("TZ", "BRT3", 1);
-    tzset();
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG7, "The current date/time in Brazil is: %s", strftime_buf);
-
-    if (sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH) {
-        struct timeval outdelta;
-        while (sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS) {
-            adjtime(NULL, &outdelta);
-            ESP_LOGI(TAG, "Waiting for adjusting time ... outdelta = %jd sec: %li ms: %li us",
-                        (intmax_t)outdelta.tv_sec,
-                        outdelta.tv_usec/1000,
-                        outdelta.tv_usec%1000);
-            vTaskDelay(2000 / portTICK_PERIOD_MS);
-        }
-    }
-
-    const int deep_sleep_sec = 10;
-    ESP_LOGI(TAG7, "Entering deep sleep for %d seconds", deep_sleep_sec);
-    esp_deep_sleep(1000000LL * deep_sleep_sec);
-}
 
 static void print_servers(void)
 {
@@ -373,8 +316,6 @@ static void obtain_time(void)
 
     ESP_ERROR_CHECK( example_disconnect() );
     esp_netif_sntp_deinit();
-
-    xQueueSend(fila_I2C, &strftime_buf, 10);
 
 }
 
@@ -544,10 +485,10 @@ static void mqtt_app_start(void)
 #endif /* CONFIG_BROKER_URL_FROM_STDIN */
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
-    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    esp_mqtt_client_start(client);
-}
+//     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+//     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+//     esp_mqtt_client_start(client);
+// }
 
 //------------------------ I2C Display -------------------------------
 // To use LV_COLOR_FORMAT_I1, we need an extra buffer to hold the converted data
@@ -831,100 +772,100 @@ static void gpio_task(void *arg)
     }
 }
 
-// /* ----------------------- Alarme do timer ------------------------------- */
+/* ----------------------- Alarme do timer ------------------------------- */
 
-// static bool IRAM_ATTR timer_alarme(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
-// {
-//     static uint64_t contagem = 0;
-//     uint64_t alarme = edata->count_value;
+static bool IRAM_ATTR timer_alarme(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
+{
+    static uint64_t contagem = 0;
+    uint64_t alarme = edata->count_value;
 
-//     contagem += alarme;
-//     acumulador_t ele = {
-//         .contagem_atual = contagem,
-//         .valor_do_alarme = alarme};
+    contagem += alarme;
+    acumulador_t ele = {
+        .contagem_atual = contagem,
+        .valor_do_alarme = alarme};
 
-//     BaseType_t high_task_awoken = pdFALSE;
+    BaseType_t high_task_awoken = pdFALSE;
 
-//     xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
+    xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
 
-//     // reconfigure alarm value
-//     gptimer_alarm_config_t alarm_config = {
-//         .alarm_count = edata->count_value + 100000, // alarm in next 1s
-//     };
-//     gptimer_set_alarm_action(timer, &alarm_config);
-//     // return whether we need to yield at the end of ISR
-//     return (high_task_awoken == pdTRUE);
-// }
+    // reconfigure alarm value
+    gptimer_alarm_config_t alarm_config = {
+        .alarm_count = edata->count_value + 100000, // alarm in next 1s
+    };
+    gptimer_set_alarm_action(timer, &alarm_config);
+    // return whether we need to yield at the end of ISR
+    return (high_task_awoken == pdTRUE);
+}
 
-// /* ----------------------- Tarefa do gptimer ------------------------------- */
-// static void timer_task(void *arg)
-// {
-//     uint64_t ultimo_log = 0;
-//     acumulador_t dado;
-//     dado.contagem_atual = 0;
-//     dado.valor_do_alarme = 0;
+/* ----------------------- Tarefa do gptimer ------------------------------- */
+static void timer_task(void *arg)
+{
+    uint64_t ultimo_log = 0;
+    acumulador_t dado;
+    dado.contagem_atual = 0;
+    dado.valor_do_alarme = 0;
 
-//     ESP_LOGI(TAG3, "Create timer handle");
-//     gptimer_handle_t gptimer = NULL;
-//     gptimer_config_t timer_config = {
-//         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-//         .direction = GPTIMER_COUNT_UP,
-//         .resolution_hz = 1000000, // 1MHz, 1 tick=1us
-//     };
+    ESP_LOGI(TAG3, "Create timer handle");
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
+    };
 
-//     ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
+    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
 
-//     gptimer_event_callbacks_t cbs = {
-//         .on_alarm = timer_alarme,
-//     };
+    gptimer_event_callbacks_t cbs = {
+        .on_alarm = timer_alarme,
+    };
 
-//     ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
-//     ESP_LOGI(TAG3, "Enable timer");
-//     ESP_ERROR_CHECK(gptimer_enable(gptimer));
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
+    ESP_LOGI(TAG3, "Enable timer");
+    ESP_ERROR_CHECK(gptimer_enable(gptimer));
 
-//     ESP_LOGI(TAG3, "Start timer, update alarm value dynamically");
-//     gptimer_alarm_config_t alarm_config3 = {
-//         .alarm_count = 1000000, // period = 1s
-//     };
-//     ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
-//     ESP_ERROR_CHECK(gptimer_start(gptimer));
+    ESP_LOGI(TAG3, "Start timer, update alarm value dynamically");
+    gptimer_alarm_config_t alarm_config3 = {
+        .alarm_count = 1000000, // period = 1s
+    };
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
+    ESP_ERROR_CHECK(gptimer_start(gptimer));
 
-//     relogio_t clock = {0, 0, 0};
-//     uint64_t segundos_totais = 0;
-//     tensao_t tensao;
-//     static int contador = 0;
+    relogio_t clock = {0, 0, 0};
+    uint64_t segundos_totais = 0;
+    tensao_t tensao;
+    static int contador = 0;
 
-//     for (;;)
-//     {
-//         if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
-//         {
-//             segundos_totais = dado.contagem_atual / 1000000;
-//             clock.horas = (segundos_totais / 3600) % 24;
-//             clock.minutos = (segundos_totais / 60) % 60;
-//             clock.segundos = segundos_totais % 60;
+    for (;;)
+    {
+        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
+        {
+            segundos_totais = dado.contagem_atual / 1000000;
+            clock.horas = (segundos_totais / 3600) % 24;
+            clock.minutos = (segundos_totais / 60) % 60;
+            clock.segundos = segundos_totais % 60;
 
-//             if (segundos_totais != ultimo_log)
-//             {
-//                 if (contador % 10 == 0)
-//                 {
-//                     ultimo_log = segundos_totais;
-//                     ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
-//                              clock.horas, clock.minutos, clock.segundos,
-//                              dado.contagem_atual, dado.valor_do_alarme);
-//                 }
-//             }
-//         }
-//                 if (xQueueReceive(fila_ADC, &tensao, 10))
-//         {
-//             contador++;
-//             if (contador % 10 == 0)
-//                 ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
-//         }
+            if (segundos_totais != ultimo_log)
+            {
+                if (contador % 10 == 0)
+                {
+                    ultimo_log = segundos_totais;
+                    ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
+                             clock.horas, clock.minutos, clock.segundos,
+                             dado.contagem_atual, dado.valor_do_alarme);
+                }
+            }
+        }
+                if (xQueueReceive(fila_ADC, &tensao, 10))
+        {
+            contador++;
+            if (contador % 10 == 0)
+                ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
+        }
 
-//         xSemaphoreGive(semaphore_pwm);
-//         xSemaphoreGive(semaphore_ADC);
-//     }
-// }
+        xSemaphoreGive(semaphore_pwm);
+        xSemaphoreGive(semaphore_ADC);
+    }
+}
 
 // /* ----------------------- Tarefa do PWM ------------------------------- */
 // static void pwm_task(void *arg)
@@ -1101,7 +1042,6 @@ static void gpio_task(void *arg)
 //----------------------- Main -------------------------------
 void app_main(void)
 {
-
     esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
@@ -1161,6 +1101,7 @@ void app_main(void)
     fila_ADC = xQueueCreate(10, sizeof(tensao_t));
     fila_I2C = xQueueCreate(10, sizeof(char));
     fila_Mqtt_cor = xQueueCreate(10, sizeof(cor_t));
+    fila_horario = xQueueCreate(10,char);
 
     // Criação do semáforo
     semaphore_pwm = xSemaphoreCreateBinary();
@@ -1170,81 +1111,144 @@ void app_main(void)
 
     xTaskCreate(gpio_task, "Tarefa para o GPIO", 4096, NULL, 10, NULL);
     xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
-    xTaskCreate(ADC_task, "Tarefa para o ADC", 4096, NULL, 10, NULL);
-    xTaskCreate(pwm_task, "Tarefa para o PWM", 4096, NULL, 10, NULL);
+    // xTaskCreate(ADC_task, "Tarefa para o ADC", 4096, NULL, 10, NULL);
+    // xTaskCreate(pwm_task, "Tarefa para o PWM", 4096, NULL, 10, NULL);
     xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
     xTaskCreate(example_display_port_task, "LVGL do Display", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
-}
 
-/*---------------------------------------------------------------
-            ADC Calibration
-    ---------------------------------------------------------------*/
-static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
-{
-    adc_cali_handle_t handle = NULL;
-    esp_err_t ret = ESP_FAIL;
-    bool calibrated = false;
+    // Protocolo SNTP
 
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (!calibrated)
-    {
-        ESP_LOGI(TAG4, "calibration scheme version is %s", "Curve Fitting");
-        adc_cali_curve_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .chan = channel,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-        if (ret == ESP_OK)
-        {
-            calibrated = true;
+    ++boot_count;
+        ESP_LOGI(TAG7, "Boot count: %d", boot_count);
+
+        time_t now;
+        struct tm timeinfo;
+        time(&now);
+        localtime_r(&now, &timeinfo);
+        // Is time set? If not, tm_year will be (1970 - 1900).
+        if (timeinfo.tm_year < (2016 - 1900)) {
+            ESP_LOGI(TAG7, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+            obtain_time();
+            // update 'now' variable with current time
+            time(&now);
         }
-    }
-#endif
+    #ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
+        else {
+            // add 500 ms error to the current system time.
+            // Only to demonstrate a work of adjusting method!
+            {
+                ESP_LOGI(TAG7, "Add a error for test adjtime");
+                struct timeval tv_now;
+                gettimeofday(&tv_now, NULL);
+                int64_t cpu_time = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+                int64_t error_time = cpu_time + 500 * 1000L;
+                struct timeval tv_error = { .tv_sec = error_time / 1000000L, .tv_usec = error_time % 1000000L };
+                settimeofday(&tv_error, NULL);
+            }
 
-#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    if (!calibrated)
-    {
-        ESP_LOGI(TAG4, "calibration scheme version is %s", "Line Fitting");
-        adc_cali_line_fitting_config_t cali_config = {
-            .unit_id = unit,
-            .atten = atten,
-            .bitwidth = ADC_BITWIDTH_DEFAULT,
-        };
-        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-        if (ret == ESP_OK)
-        {
-            calibrated = true;
+            ESP_LOGI(TAG7, "Time was set, now just adjusting it. Use SMOOTH SYNC method.");
+            obtain_time();
+            // update 'now' variable with current time
+            time(&now);
         }
-    }
-#endif
+    #endif
 
-    *out_handle = handle;
-    if (ret == ESP_OK)
-    {
-        ESP_LOGI(TAG4, "Calibration Success");
-    }
-    else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
-    {
-        ESP_LOGW(TAG4, "eFuse not burnt, skip software calibration");
-    }
-    else
-    {
-        ESP_LOGE(TAG4, "Invalid arg or no memory");
-    }
+        char strftime_buf[64];
 
-    return calibrated;
+        // Set timezone to Brasil Standard Time
+        setenv("TZ", "BRT3", 1);
+        tzset();
+        localtime_r(&now, &timeinfo);
+        strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+        ESP_LOGI(TAG7, "The current date/time in Brazil is: %s", strftime_buf);
+
+        if (sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH) {
+            struct timeval outdelta;
+            while (sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS) {
+                adjtime(NULL, &outdelta);
+                ESP_LOGI(TAG, "Waiting for adjusting time ... outdelta = %jd sec: %li ms: %li us",
+                            (intmax_t)outdelta.tv_sec,
+                            outdelta.tv_usec/1000,
+                            outdelta.tv_usec%1000);
+                vTaskDelay(2000 / portTICK_PERIOD_MS);
+            }
+        }
+
+        const int deep_sleep_sec = 10;
+        ESP_LOGI(TAG7, "Entering deep sleep for %d seconds", deep_sleep_sec);
+        esp_deep_sleep(1000000LL * deep_sleep_sec);
+
 }
 
-static void example_adc_calibration_deinit(adc_cali_handle_t handle)
-{
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    ESP_LOGI(TAG4, "deregister %s calibration scheme", "Curve Fitting");
-    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+// /*---------------------------------------------------------------
+//             ADC Calibration
+//     ---------------------------------------------------------------*/
+// static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+// {
+//     adc_cali_handle_t handle = NULL;
+//     esp_err_t ret = ESP_FAIL;
+//     bool calibrated = false;
 
-#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    ESP_LOGI(TAG4, "deregister %s calibration scheme", "Line Fitting");
-    ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
-#endif
-}
+// #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+//     if (!calibrated)
+//     {
+//         ESP_LOGI(TAG4, "calibration scheme version is %s", "Curve Fitting");
+//         adc_cali_curve_fitting_config_t cali_config = {
+//             .unit_id = unit,
+//             .chan = channel,
+//             .atten = atten,
+//             .bitwidth = ADC_BITWIDTH_DEFAULT,
+//         };
+//         ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+//         if (ret == ESP_OK)
+//         {
+//             calibrated = true;
+//         }
+//     }
+// #endif
+
+// #if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+//     if (!calibrated)
+//     {
+//         ESP_LOGI(TAG4, "calibration scheme version is %s", "Line Fitting");
+//         adc_cali_line_fitting_config_t cali_config = {
+//             .unit_id = unit,
+//             .atten = atten,
+//             .bitwidth = ADC_BITWIDTH_DEFAULT,
+//         };
+//         ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+//         if (ret == ESP_OK)
+//         {
+//             calibrated = true;
+//         }
+//     }
+// #endif
+
+//     *out_handle = handle;
+//     if (ret == ESP_OK)
+//     {
+//         ESP_LOGI(TAG4, "Calibration Success");
+//     }
+//     else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
+//     {
+//         ESP_LOGW(TAG4, "eFuse not burnt, skip software calibration");
+//     }
+//     else
+//     {
+//         ESP_LOGE(TAG4, "Invalid arg or no memory");
+//     }
+
+//     return calibrated;
+// }
+
+// static void example_adc_calibration_deinit(adc_cali_handle_t handle)
+// {
+// #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+//     ESP_LOGI(TAG4, "deregister %s calibration scheme", "Curve Fitting");
+//     ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+
+// #elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+//     ESP_LOGI(TAG4, "deregister %s calibration scheme", "Line Fitting");
+//     ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
+// #endif
+// }
