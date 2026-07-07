@@ -153,6 +153,7 @@ typedef struct
     relogio_t relogio;
     tensao_t tensao;
 } hora_e_tensao_t;
+
 typedef struct
 {
     int green;
