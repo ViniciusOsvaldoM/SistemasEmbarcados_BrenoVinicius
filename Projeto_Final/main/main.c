@@ -54,6 +54,8 @@
 #include "esp_netif_sntp.h"
 #include "lwip/ip_addr.h"
 #include "esp_sntp.h"
+#include <json_generator.h>
+
 
 
 #define CONFIG_SNTP_TIME_SERVER "pool.ntp.org"
@@ -115,11 +117,10 @@ static QueueHandle_t fila_gpio = NULL;
 static QueueHandle_t fila_contador = NULL;
 static QueueHandle_t fila_I2C = NULL;
 static QueueHandle_t fila_Mqtt_cor = NULL;
-static QueueHandle_t fila_horario = NULL;
+static QueueHandle_t fila_registro = NULL;
 
 //----------------------- Semáforos -------------------------------
-static SemaphoreHandle_t semaphore_ADC = NULL;
-static SemaphoreHandle_t semaphore_pwm = NULL;
+static SemaphoreHandle_t semaphore_registro = NULL;
 
 typedef struct
 {
@@ -136,21 +137,50 @@ typedef struct
 
 typedef struct
 {
-    int raw;
-    int multimetro;
-} tensao_t;
+    char nome[20];
+    char hora[20];
+} registro_t;
 
-typedef struct
+typedef struct {
+    char buf[256];
+    size_t offset;
+} json_gen_test_result_t;       //Struct para gerar o JSON
+
+
+//----------------------- JSON Generator -------------------------------
+
+static void flush_str(char *buf, void *priv)
 {
-    relogio_t relogio;
-    tensao_t tensao;
-} hora_e_tensao_t;
-typedef struct
+    json_gen_test_result_t *result = (json_gen_test_result_t *)priv;
+    if (result) {
+        if (strlen(buf) > sizeof(result->buf) - result->offset) {
+            printf("Result Buffer too small\r\n");
+            return;
+        }
+        memcpy(result->buf + result->offset, buf, strlen(buf));
+        result->offset += strlen(buf);
+    }
+}
+
+
+static int json_gen_perform_test(json_gen_test_result_t *result, const char *expected)
 {
-    int green;
-    int blue;
-    int red;
-} cor_t;
+	char buf[20];
+    memset(result, 0, sizeof(json_gen_test_result_t));
+	json_gen_str_t jstr;
+	json_gen_str_start(&jstr, buf, sizeof(buf), flush_str, result);
+	json_gen_start_object(&jstr);
+	json_gen_obj_set_string(&jstr, "Nome", registro.nome);
+	json_gen_obj_set_string(&jstr, "Hora", registro.hora);
+	json_gen_end_object(&jstr);
+	json_gen_str_end(&jstr);
+    if (strcmp(expected, result->buf) == 0) {
+        return 0;
+    } else {
+        return -1;
+    }
+}
+
 
 //-----------------------sntp-------------------------------
 /* LwIP SNTP example
@@ -167,6 +197,7 @@ typedef struct
  * It is placed into RTC memory using RTC_DATA_ATTR and
  * maintains its value when ESP32 wakes from deep sleep.
  */
+
 RTC_DATA_ATTR static int boot_count = 0;
 
 static void obtain_time(void);
@@ -381,29 +412,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         // converte event->data para inteiro e envia para a fila
         // respeitar o event->data_len para evitar problemas de buffer overflow
         // como distinguir os tópicos? usar event->topic para isso
-        static cor_t cor;
 
-        char data1[5];
-        snprintf(data1, event->data_len + 1, "%.*s", event->data_len, event->data);
-        int value = atoi(data1);
+        char nome [20];
 
-        if (strncmp(event->topic, "green", event->topic_len) == 0)
+        if (strncmp(event->data, "breno123", event->data_len) == 0)
         {
-            cor.green = value;
-            printf("Green: %d\n", cor.green);
-        }
-        else if (strncmp(event->topic, "blue", event->topic_len) == 0)
+            strcpy(nome, "breno");
+//            printf("Green: %d\n", cor.green);
+            xQueueSend(fila_registro, &nome, 10);    
+        }   
+
+        else if (strncmp(event->data, "vinicius123", event->data_len) == 0)
         {
-            cor.blue = value;
-            printf("Blue: %d\n", cor.blue);
-        }
-        else if (strncmp(event->topic, "red", event->topic_len) == 0)
-        {
-            cor.red = value;
-            printf("Red: %d\n", cor.red);
+            strcpy(nome, "vinicius");
+            xQueueSend(fila_registro, &nome, 10);
         }
 
-        xQueueSend(fila_Mqtt_cor, &cor, 10);
         break;
     case MQTT_EVENT_ERROR:
         ESP_LOGI(TAG6, "MQTT_EVENT_ERROR");
@@ -421,49 +445,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-static void mqtt_app_start(void)
-{
-    esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = "mqtt://g5device:g5device@node02.myqtthub.com:1883", // CONFIG_BROKER_URL: username, senha
-        .credentials.client_id = "g5device",                                       // ID
-    };
-#if CONFIG_BROKER_URL_FROM_STDIN
-    char line[128];
-
-    if (strcmp(mqtt_cfg.broker.address.uri, "FROM_STDIN") == 0)
-    {
-        int count = 0;
-        printf("Please enter url of mqtt broker\n");
-        while (count < 128)
-        {
-            int c = fgetc(stdin);
-            if (c == '\n')
-            {
-                line[count] = '\0';
-                break;
-            }
-            else if (c > 0 && c < 127)
-            {
-                line[count] = c;
-                ++count;
-            }
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-        }
-        mqtt_cfg.broker.address.uri = line;
-        printf("Broker url: %s\n", line);
-    }
-    else
-    {
-        ESP_LOGE(TAG6, "Configuration mismatch: wrong broker url");
-        abort();
-    }
-#endif /* CONFIG_BROKER_URL_FROM_STDIN */
-
-    // esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
-//     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
-//     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-//     esp_mqtt_client_start(client);
-}
 
 //------------------------ I2C Display -------------------------------
 // To use LV_COLOR_FORMAT_I1, we need an extra buffer to hold the converted data
@@ -648,13 +629,13 @@ static void example_display_port_task(void *arg)
     _lock_release(&lvgl_api_lock);
 
     char buff[64];
-    tensao_t parametro;
+    entrada_t parametro;
     relogio_t clock;
     while (1)
     {
-        if (xQueueReceive(fila_horario, &parametro, 10))
+        if (xQueueReceive(fila_registro, &parametro, 10))
         {
-            snprintf(buff, sizeof(buff), "Tensao: %d mV", parametro.multimetro);
+            snprintf(buff, sizeof(buff), "Bem-vindo, %d mV", parametro.nome);
             _lock_acquire(&lvgl_api_lock);
             lv_label_set_text(label2, buff);
             _lock_release(&lvgl_api_lock);
@@ -726,24 +707,11 @@ static void gpio_task(void *arg)
             {
                 gpio_set_level(LED_ESP, 1);
                 ESP_LOGI(TAG2, "\n\nBotao 1 pressionado");
-                ESP_LOGI(TAG2, "LED ligado\n");
-            }
-            else if (io_num == BOTAO2)
-            {
-                gpio_set_level(LED_ESP, 0);
-                ESP_LOGI(TAG2, "\n\nBotao 2 pressionado");
-                ESP_LOGI(TAG2, "LED desligado\n");
-            }
-            else if (io_num == BOTAO3)
-            {
-                LED_STATE = !LED_STATE;
-                gpio_set_level(LED_ESP, LED_STATE);
-                ESP_LOGI(TAG2, "\n\nBotao 3 pressionado");
-                ESP_LOGI(TAG2, "LED %s\n", LED_STATE ? "ligado" : "desligado");
+                ESP_LOGI(TAG2, "Digite a senha: \n");
             }
         }
 
-        xQueueSendFromISR(fila_pwm, &io_num, NULL);
+        xQueueSend(fila_registro, &io_num, NULL);
     }
 }
 
@@ -830,15 +798,8 @@ static void timer_task(void *arg)
                 }
             }
         }
-                if (xQueueReceive(fila_ADC, &tensao, 10))
-        {
-            contador++;
-            if (contador % 10 == 0)
-                ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
-        }
 
-        xSemaphoreGive(semaphore_pwm);
-        xSemaphoreGive(semaphore_ADC);
+        xSemaphoreGive(semaphore_registro);
     }
 }
 
@@ -846,6 +807,8 @@ static void timer_task(void *arg)
 //----------------------- Main -------------------------------
 void app_main(void)
 {
+    json_gen_test_result_t result; // Struct para gerar o JSON
+
     esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
@@ -901,15 +864,12 @@ void app_main(void)
     // Criação das filas
     fila_gpio = xQueueCreate(10, sizeof(uint32_t));
     fila_contador = xQueueCreate(10, sizeof(uint32_t));
-    fila_pwm = xQueueCreate(10, sizeof(uint32_t));
-    fila_ADC = xQueueCreate(10, sizeof(tensao_t));
     fila_I2C = xQueueCreate(10, sizeof(char));
     fila_Mqtt_cor = xQueueCreate(10, sizeof(cor_t));
-    fila_horario = xQueueCreate(10, sizeof(char));
+    fila_registro = xQueueCreate(10, sizeof(char));
 
     // Criação do semáforo
-    semaphore_pwm = xSemaphoreCreateBinary();
-    semaphore_ADC = xSemaphoreCreateBinary();
+    semaphore_registro = xSemaphoreCreateBinary();
 
     // Criação das tarefas
 
@@ -917,6 +877,50 @@ void app_main(void)
     xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
     xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
     xTaskCreate(example_display_port_task, "LVGL do Display", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
+
+    // MQTT
+
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = "mqtt://g5device:g5device@node02.myqtthub.com:1883", // CONFIG_BROKER_URL: username, senha
+        .credentials.client_id = "g5device",                                       // ID
+    };
+#if CONFIG_BROKER_URL_FROM_STDIN
+    char line[128];
+
+    if (strcmp(mqtt_cfg.broker.address.uri, "FROM_STDIN") == 0)
+    {
+        int count = 0;
+        printf("Please enter url of mqtt broker\n");
+        while (count < 128)
+        {
+            int c = fgetc(stdin);
+            if (c == '\n')
+            {
+                line[count] = '\0';
+                break;
+            }
+            else if (c > 0 && c < 127)
+            {
+                line[count] = c;
+                ++count;
+            }
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
+        mqtt_cfg.broker.address.uri = line;
+        printf("Broker url: %s\n", line);
+    }
+    else
+    {
+        ESP_LOGE(TAG6, "Configuration mismatch: wrong broker url");
+        abort();
+    }
+#endif /* CONFIG_BROKER_URL_FROM_STDIN */
+
+    // esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+//     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+//     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+//     esp_mqtt_client_start(client);
+
 
     // Protocolo SNTP
 
