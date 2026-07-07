@@ -100,47 +100,22 @@
 #define GPIO_OUTPUT_PIN_SEL (1ULL << LED_ESP)
 
 #define ESP_INTR_FLAG_DEFAULT 0 // Flag para GPIO
-
-//----------------------- PWM -------------------------------
-#define LEDC_TIMER LEDC_TIMER_0
-#define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define OSCILOSCOPIO (33) // Define the output GPIO
-#define LED_CHANNEL LEDC_CHANNEL_0
-#define OSCILOSCOPIO_CHANNEL LEDC_CHANNEL_1
-#define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
-#define LEDC_DUTY (4096)                // Set duty to 50%. (2 ** 13) * 50% = 4096
-#define LEDC_FREQUENCY (5000)           // Frequency in Hertz. Set frequency at 5 kHz
-
-//----------------------- ADC -------------------------------
-/*---------------------------------------------------------------
-         ADC General Macros
- ---------------------------------------------------------------*/
-// ADC1 Channels
-
-#define EXAMPLE_ADC1_CHAN0 ADC_CHANNEL_3
-
-#define EXAMPLE_ADC_ATTEN ADC_ATTEN_DB_12
-
-static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
-static void example_adc_calibration_deinit(adc_cali_handle_t handle);
+         // Frequency in Hertz. Set frequency at 5 kHz
 
 //----------------------- TAGS ESPLOGS -------------------------------
 static const char *TAG = "boot";
 static const char *TAG2 = "botoes";
 static const char *TAG3 = "RELOGIO";
 const static char *TAG4 = "EXAMPLE";
-static const char *TAG5 = "I2C";
-static const char *TAG6 = "Mqtt";
-static const char *TAG7 = "sntp";
+static const char *TAG5 = "Mqtt";
+static const char *TAG6 = "sntp";
+
 //----------------------- Filas -------------------------------
 static QueueHandle_t fila_gpio = NULL;
 static QueueHandle_t fila_contador = NULL;
-static QueueHandle_t fila_pwm = NULL;
-static QueueHandle_t fila_ADC = NULL;
 static QueueHandle_t fila_I2C = NULL;
 static QueueHandle_t fila_Mqtt_cor = NULL;
 static QueueHandle_t fila_horario = NULL;
-
 
 //----------------------- Semáforos -------------------------------
 static SemaphoreHandle_t semaphore_ADC = NULL;
@@ -207,23 +182,23 @@ void sntp_sync_time(struct timeval *tv)
 
 void time_sync_notification_cb(struct timeval *tv)
 {
-    ESP_LOGI(TAG7, "Notification of a time synchronization event");
+    ESP_LOGI(TAG6, "Notification of a time synchronization event");
 }
 
 
 static void print_servers(void)
 {
-    ESP_LOGI(TAG7, "List of configured NTP servers:");
+    ESP_LOGI(TAG6, "List of configured NTP servers:");
 
     for (uint8_t i = 0; i < SNTP_MAX_SERVERS; ++i){
         if (esp_sntp_getservername(i)){
-            ESP_LOGI(TAG7, "server %d: %s", i, esp_sntp_getservername(i));
+            ESP_LOGI(TAG6, "server %d: %s", i, esp_sntp_getservername(i));
         } else {
             // we have either IPv4 or IPv6 address, let's print it
             char buff[INET6_ADDRSTRLEN];
             ip_addr_t const *ip = esp_sntp_getserver(i);
             if (ipaddr_ntoa_r(ip, buff, INET6_ADDRSTRLEN) != NULL)
-                ESP_LOGI(TAG7, "server %d: %s", i, buff);
+                ESP_LOGI(TAG6, "server %d: %s", i, buff);
         }
     }
 }
@@ -244,7 +219,7 @@ static void obtain_time(void)
      * NOTE: This call should be made BEFORE esp acquires IP address from DHCP,
      * otherwise NTP option would be rejected by default.
      */
-    ESP_LOGI(TAG7, "Initializing SNTP");
+    ESP_LOGI(TAG6, "Initializing SNTP");
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_SNTP_TIME_SERVER);
     config.start = false;                       // start SNTP service explicitly (after connecting)
     config.server_from_dhcp = true;             // accept NTP offers from DHCP server, if any (need to enable *before* connecting)
@@ -268,7 +243,7 @@ static void obtain_time(void)
     ESP_ERROR_CHECK(example_connect());
 
 #if LWIP_DHCP_GET_NTP_SRV
-    ESP_LOGI(TAG7, "Starting SNTP");
+    ESP_LOGI(TAG6, "Starting SNTP");
     esp_netif_sntp_start();
 #if LWIP_IPV6 && SNTP_MAX_SERVERS > 2
     /* This demonstrates using IPv6 address as an additional SNTP server
@@ -281,7 +256,7 @@ static void obtain_time(void)
 #endif  /* LWIP_IPV6 */
 
 #else
-    ESP_LOGI(TAG7, "Initializing and starting SNTP");
+    ESP_LOGI(TAG6, "Initializing and starting SNTP");
 #if CONFIG_LWIP_SNTP_MAX_SERVERS > 1
     /* This demonstrates configuring more than one server
      */
@@ -309,7 +284,7 @@ static void obtain_time(void)
     int retry = 0;
     const int retry_count = 15;
     while (esp_netif_sntp_sync_wait(2000 / portTICK_PERIOD_MS) == ESP_ERR_TIMEOUT && ++retry < retry_count) {
-        ESP_LOGI(TAG7, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+        ESP_LOGI(TAG6, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
     }
     time(&now);
     localtime_r(&now, &timeinfo);
@@ -484,11 +459,11 @@ static void mqtt_app_start(void)
     }
 #endif /* CONFIG_BROKER_URL_FROM_STDIN */
 
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    // esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
 //     /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
 //     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
 //     esp_mqtt_client_start(client);
-// }
+}
 
 //------------------------ I2C Display -------------------------------
 // To use LV_COLOR_FORMAT_I1, we need an extra buffer to hold the converted data
@@ -677,7 +652,7 @@ static void example_display_port_task(void *arg)
     relogio_t clock;
     while (1)
     {
-        if (xQueueReceive(fila_ADC, &parametro, 10))
+        if (xQueueReceive(fila_horario, &parametro, 10))
         {
             snprintf(buff, sizeof(buff), "Tensao: %d mV", parametro.multimetro);
             _lock_acquire(&lvgl_api_lock);
@@ -867,177 +842,6 @@ static void timer_task(void *arg)
     }
 }
 
-// /* ----------------------- Tarefa do PWM ------------------------------- */
-// static void pwm_task(void *arg)
-// {
-//     int duty;
-//     bool manual = false;
-//     int intensidade;
-//     int green, blue, red;
-//     cor_t cor;
-//     // Prepare and then apply the LEDC PWM timer configuration
-//     ledc_timer_config_t ledc_timer = {
-//         .speed_mode = LEDC_MODE,
-//         .duty_resolution = LEDC_DUTY_RES,
-//         .timer_num = LEDC_TIMER,
-//         .freq_hz = LEDC_FREQUENCY, // Set output frequency at 5 kHz
-//         .clk_cfg = LEDC_AUTO_CLK};
-//     ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
-
-//     // Prepare and then apply the LEDC PWM channel configuration
-//     ledc_channel_config_t led_channel = {
-//         .speed_mode = LEDC_MODE,
-//         .channel = LEDC_CHANNEL_0,
-//         .timer_sel = LEDC_TIMER,
-//         .intr_type = LEDC_INTR_DISABLE,
-//         .gpio_num = GPIO_NUM_16,
-//         .duty = 0, // Set duty to 0%
-//         .hpoint = 0};
-
-//     // Prepare and then apply the LEDC PWM channel configuration
-//     ledc_channel_config_t mqtt_G_channel = {
-//         .speed_mode = LEDC_MODE,
-//         .channel = LEDC_CHANNEL_1,
-//         .timer_sel = LEDC_TIMER,
-//         .intr_type = LEDC_INTR_DISABLE,
-//         .gpio_num = OSCILOSCOPIO,
-//         .duty = 0, // Set duty to 0%
-//         .hpoint = 0};
-//     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-//     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_G_channel));
-
-//     // canal 2 pwm
-//     // Prepare and then apply the LEDC PWM channel configuration
-//     ledc_channel_config_t mqtt_B_channel = {
-//         .speed_mode = LEDC_MODE,
-//         .channel = LEDC_CHANNEL_2,
-//         .timer_sel = LEDC_TIMER,
-//         .intr_type = LEDC_INTR_DISABLE,
-//         .gpio_num = GPIO_NUM_26,
-//         .duty = 0, // Set duty to 0%
-//         .hpoint = 0};
-//     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-//     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_B_channel));
-
-//     // canal 3 pwm
-//     // Prepare and then apply the LEDC PWM channel configuration
-//     ledc_channel_config_t mqtt_R_channel = {
-//         .speed_mode = LEDC_MODE,
-//         .channel = LEDC_CHANNEL_3,
-//         .timer_sel = LEDC_TIMER,
-//         .intr_type = LEDC_INTR_DISABLE,
-//         .gpio_num = GPIO_NUM_17,
-//         .duty = 0, // Set duty to 0%
-//         .hpoint = 0};
-//     ESP_ERROR_CHECK(ledc_channel_config(&led_channel));
-//     ESP_ERROR_CHECK(ledc_channel_config(&mqtt_R_channel));
-
-//     for (;;)
-//     {
-//         xSemaphoreTake(semaphore_pwm, portMAX_DELAY);
-//         xQueueReceiveFromISR(fila_pwm, &duty, NULL);
-//         xQueueReceive(fila_Mqtt_cor, &cor, 10);
-
-//         if (duty == BOTAO1)
-//         {
-//             manual = false;
-//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, 8000);
-//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, 8000);
-//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-//             manual = false;
-
-//             printf("-------------------- 11111111111111111 --------------------\n");
-//         }
-//         else if (duty == BOTAO2)
-//         {
-//             intensidade = 0;
-//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, intensidade);
-//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, intensidade);
-//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, intensidade);
-//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
-//             ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, intensidade);
-//             ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
-
-//             printf("-------------------- 222222222222222222 --------------------\n");
-
-//             manual = false;
-//         }
-
-//         else if (duty == BOTAO3)
-//         {
-//             if (xQueueReceive(fila_Mqtt_cor, &cor, 10))
-//             {
-//                 green = cor.green;
-//                 blue = cor.blue;
-//                 red = cor.red;
-//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_1, green);
-//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_1);
-
-//                 printf("-------------------- 333333333333333333 --------------------\n");
-
-//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_0, green);
-//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_0);
-//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_2, blue);
-//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_2);
-//                 ledc_set_duty(LEDC_MODE, LEDC_CHANNEL_3, red);
-//                 ledc_update_duty(LEDC_MODE, LEDC_CHANNEL_3);
-//             }
-//         }
-//         else
-//         {
-//             printf("-------------------- xxxxxxxxxxxxxxxxxx --------------------\n");
-//         }
-//     }
-// }
-
-// static void ADC_task(void *arg)
-// {
-//     //-------------ADC1 Init---------------//
-//     adc_oneshot_unit_handle_t adc1_handle;
-//     adc_oneshot_unit_init_cfg_t init_config1 = {
-//         .unit_id = ADC_UNIT_1,
-//     };
-//     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
-
-//     //-------------ADC1 Config---------------//
-//     adc_oneshot_chan_cfg_t config = {
-//         .atten = EXAMPLE_ADC_ATTEN,
-//         .bitwidth = ADC_BITWIDTH_DEFAULT, // resolução maxima 12 bits
-//     };
-//     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &config)); // configura o canal 0 do ADC1
-
-//     //-------------ADC1 Calibration Init---------------//
-//     adc_cali_handle_t adc1_cali_chan0_handle = NULL;
-//     bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
-//     static int adc_raw;
-//     static int voltage;
-//     tensao_t tensao;
-
-//     for (;;)
-//     {
-//         xSemaphoreTake(semaphore_ADC, portMAX_DELAY);
-
-//         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw));
-
-//         if (do_calibration1_chan0)
-//             ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw, &voltage));
-//         // ESP_LOGI(TAG4, "ADC1 tensao raw: %d | tensao calibrada: %d mV", tensao.raw, tensao.multimetro);
-//         xQueueSend(fila_ADC, &tensao, 10);
-//         // xQueueSend(fila_I2C, &tensao, 10);
-//         tensao.raw = adc_raw;
-//         tensao.multimetro = voltage;
-//     }
-
-//     // Tear Down
-//     ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
-//     if (do_calibration1_chan0)
-//     {
-//         example_adc_calibration_deinit(adc1_cali_chan0_handle);
-//     }
-// }
 
 //----------------------- Main -------------------------------
 void app_main(void)
@@ -1101,7 +905,7 @@ void app_main(void)
     fila_ADC = xQueueCreate(10, sizeof(tensao_t));
     fila_I2C = xQueueCreate(10, sizeof(char));
     fila_Mqtt_cor = xQueueCreate(10, sizeof(cor_t));
-    fila_horario = xQueueCreate(10,char);
+    fila_horario = xQueueCreate(10, sizeof(char));
 
     // Criação do semáforo
     semaphore_pwm = xSemaphoreCreateBinary();
@@ -1117,7 +921,7 @@ void app_main(void)
     // Protocolo SNTP
 
     ++boot_count;
-        ESP_LOGI(TAG7, "Boot count: %d", boot_count);
+        ESP_LOGI(TAG6, "Boot count: %d", boot_count);
 
         time_t now;
         struct tm timeinfo;
@@ -1125,7 +929,7 @@ void app_main(void)
         localtime_r(&now, &timeinfo);
         // Is time set? If not, tm_year will be (1970 - 1900).
         if (timeinfo.tm_year < (2016 - 1900)) {
-            ESP_LOGI(TAG7, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+            ESP_LOGI(TAG6, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
             obtain_time();
             // update 'now' variable with current time
             time(&now);
@@ -1135,7 +939,7 @@ void app_main(void)
             // add 500 ms error to the current system time.
             // Only to demonstrate a work of adjusting method!
             {
-                ESP_LOGI(TAG7, "Add a error for test adjtime");
+                ESP_LOGI(TAG6, "Add a error for test adjtime");
                 struct timeval tv_now;
                 gettimeofday(&tv_now, NULL);
                 int64_t cpu_time = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
@@ -1144,7 +948,7 @@ void app_main(void)
                 settimeofday(&tv_error, NULL);
             }
 
-            ESP_LOGI(TAG7, "Time was set, now just adjusting it. Use SMOOTH SYNC method.");
+            ESP_LOGI(TAG6, "Time was set, now just adjusting it. Use SMOOTH SYNC method.");
             obtain_time();
             // update 'now' variable with current time
             time(&now);
@@ -1158,13 +962,13 @@ void app_main(void)
         tzset();
         localtime_r(&now, &timeinfo);
         strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-        ESP_LOGI(TAG7, "The current date/time in Brazil is: %s", strftime_buf);
+        ESP_LOGI(TAG6, "The current date/time in Brazil is: %s", strftime_buf);
 
         if (sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH) {
             struct timeval outdelta;
             while (sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS) {
                 adjtime(NULL, &outdelta);
-                ESP_LOGI(TAG, "Waiting for adjusting time ... outdelta = %jd sec: %li ms: %li us",
+                ESP_LOGI(TAG6, "Waiting for adjusting time ... outdelta = %jd sec: %li ms: %li us",
                             (intmax_t)outdelta.tv_sec,
                             outdelta.tv_usec/1000,
                             outdelta.tv_usec%1000);
@@ -1173,80 +977,7 @@ void app_main(void)
         }
 
         const int deep_sleep_sec = 10;
-        ESP_LOGI(TAG7, "Entering deep sleep for %d seconds", deep_sleep_sec);
+        ESP_LOGI(TAG6, "Entering deep sleep for %d seconds", deep_sleep_sec);
         esp_deep_sleep(1000000LL * deep_sleep_sec);
 
 }
-
-// /*---------------------------------------------------------------
-//             ADC Calibration
-//     ---------------------------------------------------------------*/
-// static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
-// {
-//     adc_cali_handle_t handle = NULL;
-//     esp_err_t ret = ESP_FAIL;
-//     bool calibrated = false;
-
-// #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-//     if (!calibrated)
-//     {
-//         ESP_LOGI(TAG4, "calibration scheme version is %s", "Curve Fitting");
-//         adc_cali_curve_fitting_config_t cali_config = {
-//             .unit_id = unit,
-//             .chan = channel,
-//             .atten = atten,
-//             .bitwidth = ADC_BITWIDTH_DEFAULT,
-//         };
-//         ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
-//         if (ret == ESP_OK)
-//         {
-//             calibrated = true;
-//         }
-//     }
-// #endif
-
-// #if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-//     if (!calibrated)
-//     {
-//         ESP_LOGI(TAG4, "calibration scheme version is %s", "Line Fitting");
-//         adc_cali_line_fitting_config_t cali_config = {
-//             .unit_id = unit,
-//             .atten = atten,
-//             .bitwidth = ADC_BITWIDTH_DEFAULT,
-//         };
-//         ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
-//         if (ret == ESP_OK)
-//         {
-//             calibrated = true;
-//         }
-//     }
-// #endif
-
-//     *out_handle = handle;
-//     if (ret == ESP_OK)
-//     {
-//         ESP_LOGI(TAG4, "Calibration Success");
-//     }
-//     else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated)
-//     {
-//         ESP_LOGW(TAG4, "eFuse not burnt, skip software calibration");
-//     }
-//     else
-//     {
-//         ESP_LOGE(TAG4, "Invalid arg or no memory");
-//     }
-
-//     return calibrated;
-// }
-
-// static void example_adc_calibration_deinit(adc_cali_handle_t handle)
-// {
-// #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-//     ESP_LOGI(TAG4, "deregister %s calibration scheme", "Curve Fitting");
-//     ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
-
-// #elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-//     ESP_LOGI(TAG4, "deregister %s calibration scheme", "Line Fitting");
-//     ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
-// #endif
-// }
