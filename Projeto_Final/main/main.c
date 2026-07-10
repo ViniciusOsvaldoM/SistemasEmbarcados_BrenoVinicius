@@ -4,14 +4,9 @@
 // Alunos: Breno Guimarães
 //         Vinícius Osvaldo
 
-// PRÁTICA 4
-// Objetivo: fazer um controle PWM utilizando 3 botões por meio de interrupções, timers, filas e semáforos.
+// Trabalho final - Jogo da cobrinha
 
-/*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Apache-2.0
- */
+
 #include <stdio.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -25,13 +20,8 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
-#include "driver/gptimer.h"
-#include "driver/ledc.h"
 #include "esp_err.h"
 #include "soc/soc_caps.h"
-#include "esp_adc/adc_oneshot.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
 #include <unistd.h>
 #include <sys/lock.h>
 #include <sys/param.h>
@@ -50,19 +40,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include "esp_attr.h"
-#include "esp_sleep.h"
-#include "esp_netif_sntp.h"
-#include "lwip/ip_addr.h"
-#include "esp_sntp.h"
-#include <json_generator.h>
 
 
-
-#define CONFIG_SNTP_TIME_SERVER "pool.ntp.org"
-//------------------------sntp-------------------------------
-#ifndef INET6_ADDRSTRLEN
-#define INET6_ADDRSTRLEN 48
-#endif
 
 //----------------------- I2C -------------------------------
 
@@ -93,397 +72,18 @@
 #define EXAMPLE_LVGL_TASK_MAX_DELAY_MS 500
 #define EXAMPLE_LVGL_TASK_MIN_DELAY_MS 1000 / CONFIG_FREERTOS_HZ
 
-//----------------------- GPIO -------------------------------
-#define BOTAO1 21
-#define BOTAO2 22
-#define BOTAO3 23
-#define GPIO_INPUT_PIN_SEL ((1ULL << BOTAO1) | (1ULL << BOTAO2) | (1ULL << BOTAO3))
-#define LED_ESP 2
-#define GPIO_OUTPUT_PIN_SEL (1ULL << LED_ESP)
+#define TAMANHO_COBRA 5     //numero de segmentos
 
-#define ESP_INTR_FLAG_DEFAULT 0 // Flag para GPIO
-         // Frequency in Hertz. Set frequency at 5 kHz
+//---------------------------- TAGS ESPLOGS --------------------------------
 
-//----------------------- TAGS ESPLOGS -------------------------------
-static const char *TAG = "boot";
-static const char *TAG2 = "botoes";
-static const char *TAG3 = "RELOGIO";
-const static char *TAG4 = "EXAMPLE";
-static const char *TAG5 = "Mqtt";
-static const char *TAG6 = "sntp";
+static const char *TAG = "boot"; // Boot
+static const char *TAG5 = "I2C"; // Display
+static const char *TAG6 = "MQTT"; // MQTT
 
-//----------------------- Filas -------------------------------
-static QueueHandle_t fila_gpio = NULL;
-static QueueHandle_t fila_contador = NULL;
-static QueueHandle_t fila_I2C = NULL;
-static QueueHandle_t fila_registro = NULL;
+//--------------------------------- FILAS -------------------------------
 
-//----------------------- Semáforos -------------------------------
-static SemaphoreHandle_t semaphore_registro = NULL;
+static QueueHandle_t fila_I2C = NULL; // Fila para o display
 
-typedef struct
-{
-    uint64_t contagem_atual;
-    uint64_t valor_do_alarme;
-} acumulador_t;
-
-typedef struct
-{
-    int horas;
-    int minutos;
-    int segundos;
-} relogio_t;
-
-typedef struct
-{
-    char nome[20];
-    char hora[20];
-} registro_t;
-
-typedef struct {
-    char buf[256];
-    size_t offset;
-} json_gen_test_result_t;       //Struct para gerar o JSON
-
-
-//----------------------- JSON Generator -------------------------------
-
-static void flush_str(char *buf, void *priv)
-{
-    json_gen_test_result_t *result = (json_gen_test_result_t *)priv;
-    if (result) {
-        if (strlen(buf) > sizeof(result->buf) - result->offset) {
-            printf("Result Buffer too small\r\n");
-            return;
-        }
-        memcpy(result->buf + result->offset, buf, strlen(buf));
-        result->offset += strlen(buf);
-    }
-}
-
-static void json_task(void *arg)
-{
-json_gen_test_result_t *result;
-
-// static int json_gen_perform_test(json_gen_test_result_t *result) {    
-   for (;;){
-        xSemaphoreTake(semaphore_registro, portMAX_DELAY);
-        registro_t registro;
-        char buf[20];
-        memset(result, 0, sizeof(json_gen_test_result_t));
-        json_gen_str_t jstr;
-        json_gen_str_start(&jstr, buf, sizeof(buf), flush_str, result);
-        json_gen_start_object(&jstr);
-        json_gen_obj_set_string(&jstr, "Nome", registro.nome);
-        json_gen_obj_set_string(&jstr, "Hora", registro.hora);
-        json_gen_end_object(&jstr);
-        json_gen_str_end(&jstr);
-   }
-}
-
-
-//-------------------------------------------------sntp------------------------------------------------------------
-/* LwIP SNTP example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
-
-
-/* Variable holding number of times ESP32 restarted since first boot.
- * It is placed into RTC memory using RTC_DATA_ATTR and
- * maintains its value when ESP32 wakes from deep sleep.
- */
-
-RTC_DATA_ATTR static int boot_count = 0;
-
-static void obtain_time(void);
-
-#ifdef CONFIG_SNTP_TIME_SYNC_METHOD_CUSTOM
-void sntp_sync_time(struct timeval *tv)
-{
-   settimeofday(tv, NULL);
-   ESP_LOGI(TAG, "Time is synchronized from custom code");
-   sntp_set_sync_status(SNTP_SYNC_STATUS_COMPLETED);
-}
-#endif
-
-void time_sync_notification_cb(struct timeval *tv)
-{
-    ESP_LOGI(TAG6, "Notification of a time synchronization event");
-}
-
-
-static void print_servers(void)
-{
-    ESP_LOGI(TAG6, "List of configured NTP servers:");
-
-    for (uint8_t i = 0; i < SNTP_MAX_SERVERS; ++i){
-        if (esp_sntp_getservername(i)){
-            ESP_LOGI(TAG6, "server %d: %s", i, esp_sntp_getservername(i));
-        } else {
-            // we have either IPv4 or IPv6 address, let's print it
-            char buff[INET6_ADDRSTRLEN];
-            ip_addr_t const *ip = esp_sntp_getserver(i);
-            if (ipaddr_ntoa_r(ip, buff, INET6_ADDRSTRLEN) != NULL)
-                ESP_LOGI(TAG6, "server %d: %s", i, buff);
-        }
-    }
-}
-
-static void obtain_time(void)
-{
-    ESP_ERROR_CHECK( nvs_flash_init() );
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK( esp_event_loop_create_default() );
-
-#if LWIP_DHCP_GET_NTP_SRV
-    /**
-     * NTP server address could be acquired via DHCP,
-     * see following menuconfig options:
-     * 'LWIP_DHCP_GET_NTP_SRV' - enable STNP over DHCP
-     * 'LWIP_SNTP_DEBUG' - enable debugging messages
-     *
-     * NOTE: This call should be made BEFORE esp acquires IP address from DHCP,
-     * otherwise NTP option would be rejected by default.
-     */
-    ESP_LOGI(TAG6, "Initializing SNTP");
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_SNTP_TIME_SERVER);
-    config.start = false;                       // start SNTP service explicitly (after connecting)
-    config.server_from_dhcp = true;             // accept NTP offers from DHCP server, if any (need to enable *before* connecting)
-    config.renew_servers_after_new_IP = true;   // let esp-netif update configured SNTP server(s) after receiving DHCP lease
-    config.index_of_first_server = 1;           // updates from server num 1, leaving server 0 (from DHCP) intact
-    // configure the event on which we renew servers
-#ifdef CONFIG_EXAMPLE_CONNECT_WIFI
-    config.ip_event_to_renew = IP_EVENT_STA_GOT_IP;
-#else
-    config.ip_event_to_renew = IP_EVENT_ETH_GOT_IP;
-#endif
-    config.sync_cb = time_sync_notification_cb; // only if we need the notification function
-    esp_netif_sntp_init(&config);
-
-#endif /* LWIP_DHCP_GET_NTP_SRV */
-
-    /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
-     * Read "Establishing Wi-Fi or Ethernet Connection" section in
-     * examples/protocols/README.md for more information about this function.
-     */
-    ESP_ERROR_CHECK(example_connect());
-
-#if LWIP_DHCP_GET_NTP_SRV
-    ESP_LOGI(TAG6, "Starting SNTP");
-    esp_netif_sntp_start();
-#if LWIP_IPV6 && SNTP_MAX_SERVERS > 2
-    /* This demonstrates using IPv6 address as an additional SNTP server
-     * (statically assigned IPv6 address is also possible)
-     */
-    ip_addr_t ip6;
-    if (ipaddr_aton("2a01:3f7::1", &ip6)) {    // ipv6 ntp source "ntp.netnod.se"
-        esp_sntp_setserver(2, &ip6);
-    }
-#endif  /* LWIP_IPV6 */
-
-#else
-    ESP_LOGI(TAG6, "Initializing and starting SNTP");
-#if CONFIG_LWIP_SNTP_MAX_SERVERS > 1
-    /* This demonstrates configuring more than one server
-     */
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(2,
-                               ESP_SNTP_SERVER_LIST(CONFIG_SNTP_TIME_SERVER, "pool.ntp.org" ) );
-#else
-    /*
-     * This is the basic default config with one server and starting the service
-     */
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(CONFIG_SNTP_TIME_SERVER);
-#endif
-    config.sync_cb = time_sync_notification_cb;     // Note: This is only needed if we want
-#ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
-    config.smooth_sync = true;
-#endif
-
-    esp_netif_sntp_init(&config);
-#endif
-
-    print_servers();
-
-    // wait for time to be set
-    time_t now = 0;
-    struct tm timeinfo = { 0 };
-    int retry = 0;
-    const int retry_count = 15;
-    while (esp_netif_sntp_sync_wait(2000 / portTICK_PERIOD_MS) == ESP_ERR_TIMEOUT && ++retry < retry_count) {
-        ESP_LOGI(TAG6, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
-    }
-    time(&now);
-    localtime_r(&now, &timeinfo);
-
-    ESP_ERROR_CHECK( example_disconnect() );
-    esp_netif_sntp_deinit();
-
-}
-
-
-//----------------------- Mqtt -------------------------------
-/* MQTT (over TCP) Example
-
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
-
-static void log_error_if_nonzero(const char *message, int error_code)
-{
-    if (error_code != 0)
-    {
-        ESP_LOGE(TAG6, "Last error %s: 0x%x", message, error_code);
-    }
-}
-
-/*
- * @brief Event handler registered to receive MQTT events
- *
- *  This function is called by the MQTT client event loop.
- *
- * @param handler_args user data registered to the event.
- * @param base Event base for the handler(always MQTT Base in this example).
- * @param event_id The id for the received event.
- * @param event_data The data for the event, esp_mqtt_event_handle_t.
- */
- 
-static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
-{
-    ESP_LOGD(TAG6, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
-    esp_mqtt_event_handle_t event = event_data;
-    esp_mqtt_client_handle_t client = event->client;
-    int msg_id;
-
-    switch ((esp_mqtt_event_id_t)event_id)
-    {
-    case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG6, "MQTT_EVENT_CONNECTED");
-        msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
-        ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_subscribe(client, "registro", 0);
-        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
-
-        msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-        ESP_LOGI(TAG6, "sent unsubscribe successful, msg_id=%d", msg_id);
-        break;
-    // case MQTT_EVENT_DISCONNECTED:
-    //     ESP_LOGI(TAG6, "MQTT_EVENT_DISCONNECTED");
-    //     break;
-
-    // case MQTT_EVENT_SUBSCRIBED:
-    //     ESP_LOGI(TAG6, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
-    //     msg_id = esp_mqtt_client_publish(client, "green", "data", 0, 0, 0);
-    //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
-
-    //     msg_id = esp_mqtt_client_publish(client, "blue", "data", 0, 0, 0);
-    //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
-
-    //     msg_id = esp_mqtt_client_publish(client, "red", "data", 0, 0, 0);
-    //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
-
-    //    break;
-    case MQTT_EVENT_UNSUBSCRIBED:
-        ESP_LOGI(TAG6, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
-        break;
-        // case MQTT_EVENT_PUBLISHED:
-        //     ESP_LOGI(TAG6, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
-        //     break;
-    case MQTT_EVENT_DATA:
-        ESP_LOGI(TAG6, "MQTT_EVENT_DATA");
-        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-        printf("DATA=%.*s\r\n", event->data_len, event->data);
-        // converte event->data para inteiro e envia para a fila
-        // respeitar o event->data_len para evitar problemas de buffer overflow
-        // como distinguir os tópicos? usar event->topic para isso
-
-        char nome [20];
-        
-        if (strncmp(event->data, "breno123", event->data_len) == 0)
-        {
-            strcpy(nome, "breno");
-//            printf("Green: %d\n", cor.green);
-            xQueueSend(fila_registro, &nome, 10);    
-        }   
-
-        else if (strncmp(event->data, "vinicius123", event->data_len) == 0)
-        {
-            strcpy(nome, "vinicius");
-            xQueueSend(fila_registro, &nome, 10);
-        }
-
-        break;
-    case MQTT_EVENT_ERROR:
-        ESP_LOGI(TAG6, "MQTT_EVENT_ERROR");
-        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
-        {
-            log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
-            log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
-            log_error_if_nonzero("captured as transport's socket errno", event->error_handle->esp_transport_sock_errno);
-            ESP_LOGI(TAG6, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
-        }
-        break;
-    default:
-        ESP_LOGI(TAG6, "Other event id:%d", event->event_id);
-        break;
-    }
-}
-
-
-static void mqtt_app_start(void)
-{
-    esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = "mqtt://g5device:g5device@node02.myqtthub.com:1883", // CONFIG_BROKER_URL: username, senha
-        .credentials.client_id = "g5device",                                       // ID
-    };
-#if CONFIG_BROKER_URL_FROM_STDIN
-    char line[128];
-
-    if (strcmp(mqtt_cfg.broker.address.uri, "FROM_STDIN") == 0)
-    {
-        int count = 0;
-        printf("Please enter url of mqtt broker\n");
-        while (count < 128)
-        {
-            int c = fgetc(stdin);
-            if (c == '\n')
-            {
-                line[count] = '\0';
-                break;
-            }
-            else if (c > 0 && c < 127)
-            {
-                line[count] = c;
-                ++count;
-            }
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-        }
-        mqtt_cfg.broker.address.uri = line;
-        printf("Broker url: %s\n", line);
-    }
-    else
-    {
-        ESP_LOGE(TAG6, "Configuration mismatch: wrong broker url");
-        abort();
-    }
-#endif /* CONFIG_BROKER_URL_FROM_STDIN */
-
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
-    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
-    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    esp_mqtt_client_start(client);
-}
 
 //------------------------ I2C Display -------------------------------
 // To use LV_COLOR_FORMAT_I1, we need an extra buffer to hold the converted data
@@ -492,19 +92,50 @@ static uint8_t oled_buffer[EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES / 8];
 static _lock_t lvgl_api_lock;
 lv_obj_t *label;
 lv_obj_t *label2;
+lv_obj_t *cobra; // Variável global para a cobra
+int largura = 10;
+lv_obj_t *semente; // Variável global para a semente
+
 
 void example_lvgl_demo_ui(lv_display_t *disp)
 {
-
     lv_obj_t *scr = lv_display_get_screen_active(disp);
-    label = lv_label_create(scr);
-    label2 = lv_label_create(scr);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_label_set_text(label, "00:00:00  ");
-    lv_obj_set_width(label, lv_display_get_horizontal_resolution(disp));
-    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_align(label2, LV_ALIGN_BOTTOM_MID, 0, 0);
+    //label = lv_label_create(scr);
+   // label2 = lv_label_create(scr);
+    //lv_label_set_long_mode(label2, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    //lv_label_set_text(label2, "Jogo da cobrinha");
+    //lv_obj_align(label2, LV_ALIGN_CENTER, 0, 0);
+   // lv_obj_set_width(label2, lv_display_get_horizontal_resolution(disp));
+    //lv_obj_align(label2, LV_ALIGN_TOP_MID, 0, 0);
+   // lv_obj_align(label2, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+
+    // Cria a cobra usando a variável global
+    cobra = lv_obj_create(scr);
+    lv_obj_set_size(cobra, largura, 10); //proporção da cobra 
+    lv_obj_set_style_bg_color(cobra, lv_color_black(), 0);
+    lv_obj_align(cobra, LV_ALIGN_CENTER, 0, 0);
+    
+    //cria a semente
+    semente = lv_obj_create(scr);
+    lv_obj_set_size(semente, 7, 7);
+    lv_obj_set_style_bg_color(semente, lv_color_black(), 0);
+    lv_obj_set_pos(semente, 20, 20); //posição inicial da semente
+
+   
 }
+
+void reposicionar_semente()
+{
+    int max_x = EXAMPLE_LCD_H_RES - 5;
+    int max_y = EXAMPLE_LCD_V_RES - 5;
+
+    int novo_x = (rand() % max_x);
+    int novo_y = (rand() % max_y);
+
+    lv_obj_set_pos(semente, novo_x, novo_y);
+}
+
 
 static bool example_notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t io_panel, esp_lcd_panel_io_event_data_t *edata, void *user_ctx)
 {
@@ -578,6 +209,7 @@ static void example_lvgl_port_task(void *arg)
         usleep(1000 * time_till_next_ms);
     }
 }
+
 
 static void example_display_port_task(void *arg)
 {
@@ -667,183 +299,255 @@ static void example_display_port_task(void *arg)
     example_lvgl_demo_ui(display);
     _lock_release(&lvgl_api_lock);
 
-    char buff[64];
-    registro_t registro;
-    relogio_t clock;
-    while (1)
-    {
-        if (xQueueReceive(fila_I2C, &registro, 10))
-        {
-            snprintf(buff, sizeof(buff), "Bem-vindo, %s", registro.nome);
-            _lock_acquire(&lvgl_api_lock);
-            lv_label_set_text(label2, buff);
-            _lock_release(&lvgl_api_lock);
-        }
 
-        if (xQueueReceive(fila_I2C, &clock, 10))
-        {
-            snprintf(buff, sizeof(buff), " %d:%d:%d", clock.horas, clock.minutos, clock.segundos);
-            _lock_acquire(&lvgl_api_lock);
-            lv_label_set_text(label, buff);
-            _lock_release(&lvgl_api_lock);
-        }
-    }
-}
-
-//----------------------- Interrupção GPIO -------------------------------
-static void IRAM_ATTR gpio_isr_handler(void *arg)
-{
-    uint32_t gpio_num = (uint32_t)arg;
-    xQueueSendFromISR(fila_gpio, &gpio_num, NULL);
-}
-
-/* ----------------------- Tarefa GPIO  ------------------------------- */
-static void gpio_task(void *arg)
-{
-    gpio_config_t io_conf = {};
-    // disable interrupt
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    // set as output mode
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    // bit mask of the pin 2
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    // disable pull-down mode
-    io_conf.pull_down_en = 0;
-    // disable pull-up mode
-    io_conf.pull_up_en = 0;
-    // configure GPIO with the given settings
-    gpio_config(&io_conf);
-
-    // interrupt of rising edge
-    io_conf.intr_type = GPIO_INTR_NEGEDGE;
-    // bit mask of the pins 21,22,23
-    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    // set as input mode
-    io_conf.mode = GPIO_MODE_INPUT;
-    // enable pull-up mode
-    io_conf.pull_up_en = 1;
-    gpio_config(&io_conf);
-
-    // change gpio interrupt type for one pin
-    gpio_set_intr_type(LED_ESP, GPIO_INTR_ANYEDGE);
-
-    // Inicia gpio isr service
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    // hook isr handler for specific gpio pin
-    gpio_isr_handler_add(BOTAO1, gpio_isr_handler, (void *)BOTAO1);
+   
     
-    uint32_t io_num;
+    int x = 0, y = 0;
 
-    for (;;)
-    {
-        if (xQueueReceive(fila_gpio, &io_num, 10))
+    // Se a direção pressionada for direta:   incrementar x até 64 e voltar para -64 
+    //                              esquerda: decrementar x até -32 e voltar para 32 
+    //                              cima:     decrementar y até -32 e voltar para 32 
+    //                              baixo:    incrementar y até 32 e voltar para -32 
+    
+    //lv_obj_t *scr = lv_display_get_screen_active(display);
+   // lv_obj_clean(scr); // Limpa a tela antes de desenhar novamente
+    while (1)
+    {   
+        char direcao[5];
+        lv_area_t area_cobra, area_semente;
+        lv_obj_get_coords(cobra, &area_cobra);
+        lv_obj_get_coords(semente, &area_semente);
+ 
+        //verifica colisão
+        if (!(area_cobra.x2 < area_semente.x1 || 
+              area_cobra.x1 > area_semente.x2 || 
+              area_cobra.y2 < area_semente.y1 || 
+              area_cobra.y1 > area_semente.y2))
         {
-
-            if (io_num == BOTAO1)
-            {
-                gpio_set_level(LED_ESP, 1);
-                ESP_LOGI(TAG2, "\n\nBotao 1 pressionado");
-                printf("Digite a senha: \n");
-            }
+            //colisão derectada
+            largura += 5; // aumenta o tamanho da cobra
+            lv_obj_set_size(cobra, largura, 7); // atualiza o tamanho da cobra
+            
+            ESP_LOGI(TAG5, "Colisão detectada!");
+            reposicionar_semente();
         }
 
-        xSemaphoreGive(semaphore_registro);
+        _lock_acquire(&lvgl_api_lock);
+        lv_obj_set_pos(cobra, x, y);
+        _lock_release(&lvgl_api_lock);
+
+        xQueueReceive(fila_I2C, &direcao, 10);
+        
+        ESP_LOGI(TAG5, "Direcao recebida: %s", direcao);
+        ESP_LOGI(TAG5, "x = %d, y = %d", x, y);
+            
+            if (strcmp(direcao, "up") == 0)
+            {
+                y = y - 5; // move verticalmente para cima
+                if (y <= -32)
+                    y = 32;
+            vTaskDelay(pdMS_TO_TICKS(200));
+            }
+            else if (strcmp(direcao, "down") == 0)
+            {
+                y = y + 5; // move verticalmente para baixo
+                if (y >= 32)
+                    y = -32;
+
+            vTaskDelay(pdMS_TO_TICKS(200));
+            }
+            else if (strcmp(direcao, "left") == 0)
+            {
+                x = x - 5; // move horizontalmente para a esquerda
+                if (x <= -64)
+                    x = 64;
+
+            vTaskDelay(pdMS_TO_TICKS(200));
+            }
+            else if (strcmp(direcao, "right") == 0)
+            {
+                x = x + 5; // move horizontalmente
+                if (x >= 64)
+                    x = -64;
+
+            vTaskDelay(pdMS_TO_TICKS(200));
+            }
+        
+
+    }
+    
+
+}
+
+
+//----------------------- Mqtt -------------------------------
+/* MQTT (over TCP) Example
+
+   This example code is in the Public Domain (or CC0 licensed, at your option.)
+
+   Unless required by applicable law or agreed to in writing, this
+   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+   CONDITIONS OF ANY KIND, either express or implied.
+*/
+
+
+
+static void log_error_if_nonzero(const char *message, int error_code)
+{
+    if (error_code != 0)
+    {
+        ESP_LOGE(TAG6, "Last error %s: 0x%x", message, error_code);
     }
 }
 
-/* ----------------------- Alarme do timer ------------------------------- */
+/*
+ * @brief Event handler registered to receive MQTT events
+ *
+ *  This function is called by the MQTT client event loop.
+ *
+ * @param handler_args user data registered to the event.
+ * @param base Event base for the handler(always MQTT Base in this example).
+ * @param event_id The id for the received event.
+ * @param event_data The data for the event, esp_mqtt_event_handle_t.
+ */
 
-static bool IRAM_ATTR timer_alarme(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data)
+ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
 {
-    static uint64_t contagem = 0;
-    uint64_t alarme = edata->count_value;
+    ESP_LOGD(TAG6, "Event dispatched from event loop base=%s, event_id=%" PRIi32 "", base, event_id);
+    esp_mqtt_event_handle_t event = event_data;
+    esp_mqtt_client_handle_t client = event->client;
+    int msg_id;
 
-    contagem += alarme;
-    acumulador_t ele = {
-        .contagem_atual = contagem,
-        .valor_do_alarme = alarme};
-
-    BaseType_t high_task_awoken = pdFALSE;
-
-    xQueueSendFromISR(fila_contador, &ele, &high_task_awoken);
-
-    // reconfigure alarm value
-    gptimer_alarm_config_t alarm_config = {
-        .alarm_count = edata->count_value + 100000, // alarm in next 1s
-    };
-    gptimer_set_alarm_action(timer, &alarm_config);
-    // return whether we need to yield at the end of ISR
-    return (high_task_awoken == pdTRUE);
-}
-
-/* ----------------------- Tarefa do gptimer ------------------------------- */
-static void timer_task(void *arg)
-{
-    uint64_t ultimo_log = 0;
-    acumulador_t dado;
-    dado.contagem_atual = 0;
-    dado.valor_do_alarme = 0;
-
-    ESP_LOGI(TAG3, "Create timer handle");
-    gptimer_handle_t gptimer = NULL;
-    gptimer_config_t timer_config = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000, // 1MHz, 1 tick=1us
-    };
-
-    ESP_ERROR_CHECK(gptimer_new_timer(&timer_config, &gptimer));
-
-    gptimer_event_callbacks_t cbs = {
-        .on_alarm = timer_alarme,
-    };
-
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(gptimer, &cbs, NULL));
-    ESP_LOGI(TAG3, "Enable timer");
-    ESP_ERROR_CHECK(gptimer_enable(gptimer));
-
-    ESP_LOGI(TAG3, "Start timer, update alarm value dynamically");
-    gptimer_alarm_config_t alarm_config3 = {
-        .alarm_count = 1000000, // period = 1s
-    };
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(gptimer, &alarm_config3));
-    ESP_ERROR_CHECK(gptimer_start(gptimer));
-
-    relogio_t clock = {0, 0, 0};
-    uint64_t segundos_totais = 0;
-    static int contador = 0;
-
-    for (;;)
+    switch ((esp_mqtt_event_id_t)event_id)
     {
-        if (xQueueReceive(fila_contador, &dado, portMAX_DELAY))
+    case MQTT_EVENT_CONNECTED:
+        ESP_LOGI(TAG6, "MQTT_EVENT_CONNECTED");
+        msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
+        ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "up", 0);
+        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "down", 0);
+        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "left", 0);
+        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "right", 0);
+        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+        ESP_LOGI(TAG6, "sent subscribe successful, msg_id=%d", msg_id);
+
+        msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+
+        ESP_LOGI(TAG6, "sent unsubscribe successful, msg_id=%d", msg_id);
+        break;
+
+        // case MQTT_EVENT_DISCONNECTED:
+        //     ESP_LOGI(TAG6, "MQTT_EVENT_DISCONNECTED");
+        //     break;
+
+        // case MQTT_EVENT_SUBSCRIBED:
+        //     ESP_LOGI(TAG6, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+        //     msg_id = esp_mqtt_client_publish(client, "green", "data", 0, 0, 0);
+        //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+
+        //     msg_id = esp_mqtt_client_publish(client, "blue", "data", 0, 0, 0);
+        //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+        //     msg_id = esp_mqtt_client_publish(client, "red", "data", 0, 0, 0);
+        //     ESP_LOGI(TAG6, "sent publish successful, msg_id=%d", msg_id);
+
+        //    break;
+    case MQTT_EVENT_UNSUBSCRIBED:
+        ESP_LOGI(TAG6, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+        break;
+        // case MQTT_EVENT_PUBLISHED:
+        //     ESP_LOGI(TAG6, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+        //     break;
+    case MQTT_EVENT_DATA:
+        ESP_LOGI(TAG6, "MQTT_EVENT_DATA");
+        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+        printf("DATA=%.*s\r\n", event->data_len, event->data);
+
+        // Fazer o envio da direção para a fila I2C para atualizar o display
+        // Fila I2C: Fila que recebe a string de direção
+        // As direçoes serão comparadas com os tópicos dos botões: up, down, left, right
+ 
+        char direcao[5];
+        strncpy(direcao, event->topic, event->topic_len);
+        ESP_LOGI(TAG6, "Direcao: %s", direcao);
+        xQueueSend(fila_I2C, &direcao, 10);
+
+        break;
+        case MQTT_EVENT_ERROR:
+        ESP_LOGI(TAG6, "MQTT_EVENT_ERROR");
+        if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT)
         {
-            segundos_totais = dado.contagem_atual / 1000000;
-            clock.horas = (segundos_totais / 3600) % 24;
-            clock.minutos = (segundos_totais / 60) % 60;
-            clock.segundos = segundos_totais % 60;
-
-            if (segundos_totais != ultimo_log)
-            {
-                if (contador % 10 == 0)
-                {
-                    ultimo_log = segundos_totais;
-                    ESP_LOGI(TAG3, "Hora: %02d: %02d: %02d | Contagem: %llu | Alarme: %llu",
-                        clock.horas, clock.minutos, clock.segundos,
-                        dado.contagem_atual, dado.valor_do_alarme);
-                }
-            }
+            log_error_if_nonzero("reported from esp-tls", event->error_handle->esp_tls_last_esp_err);
+            log_error_if_nonzero("reported from tls stack", event->error_handle->esp_tls_stack_err);
+            log_error_if_nonzero("captured as transport's socket errno", event->error_handle->esp_transport_sock_errno);
+            ESP_LOGI(TAG6, "Last errno string (%s)", strerror(event->error_handle->esp_transport_sock_errno));
         }
-
-        xSemaphoreGive(semaphore_registro);
+        break;
+        default:
+        ESP_LOGI(TAG6, "Other event id:%d", event->event_id);
+        break;
     }
 }
 
+static void mqtt_app_start(void)
+{
+    esp_mqtt_client_config_t mqtt_cfg = {
+        .broker.address.uri = "mqtt://g5device:g5device@node02.myqtthub.com:1883", // CONFIG_BROKER_URL: username, senha
+        .credentials.client_id = "g5device",                                       // ID
+    };
+#if CONFIG_BROKER_URL_FROM_STDIN
+    char line[128];
 
-//----------------------- Main -------------------------------
+    if (strcmp(mqtt_cfg.broker.address.uri, "FROM_STDIN") == 0)
+    {
+        int count = 0;
+        printf("Please enter url of mqtt broker\n");
+        while (count < 128)
+        {
+            int c = fgetc(stdin);
+            if (c == '\n')
+            {
+                line[count] = '\0';
+                break;
+            }
+            else if (c > 0 && c < 127)
+            {
+                line[count] = c;
+                ++count;
+            }
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
+        mqtt_cfg.broker.address.uri = line;
+        printf("Broker url: %s\n", line);
+    }
+    else
+    {
+        ESP_LOGE(TAG6, "Configuration mismatch: wrong broker url");
+        abort();
+    }
+#endif /* CONFIG_BROKER_URL_FROM_STDIN */
+
+    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+    esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(client);
+}
+
+
+
+
+//---------------------------------- Main -----------------------------------------
+
 void app_main(void)
 {
-    json_gen_test_result_t result; // Struct para gerar o JSON
-
     esp_chip_info_t chip_info;
     uint32_t flash_size;
     esp_chip_info(&chip_info);
@@ -871,11 +575,11 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Versão do ESP-IDF: %s\n", IDF_VER);
 
-    ESP_LOGI(TAG6, "[APP] Startup..");
-    ESP_LOGI(TAG6, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
-    ESP_LOGI(TAG6, "[APP] IDF version: %s", esp_get_idf_version());
+    ESP_LOGI(TAG, "[APP] Startup..");
+    ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
+    ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
 
-    //-------Mqtt Logs Config-------//
+       //-------Mqtt Logs Config-------//
     esp_log_level_set("*", ESP_LOG_INFO);
     esp_log_level_set("mqtt_client", ESP_LOG_VERBOSE);
     esp_log_level_set("mqtt_example", ESP_LOG_VERBOSE);
@@ -897,83 +601,12 @@ void app_main(void)
     mqtt_app_start();
 
     // Criação das filas
-    fila_gpio = xQueueCreate(10, sizeof(uint32_t));
-    fila_contador = xQueueCreate(10, sizeof(uint32_t));
-    fila_I2C = xQueueCreate(10, sizeof(char));
-    fila_registro = xQueueCreate(10, sizeof(char));
-
-    // Criação do semáforo
-    semaphore_registro = xSemaphoreCreateBinary();
+    fila_I2C = xQueueCreate(10, sizeof(char[5]));
+ 
 
     // Criação das tarefas
 
-    xTaskCreate(gpio_task, "Tarefa para o GPIO", 4096, NULL, 10, NULL);
-    xTaskCreate(timer_task, "Tarefa para o timer", 4096, NULL, 10, NULL);
     xTaskCreate(example_lvgl_port_task, "LVGL", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
     xTaskCreate(example_display_port_task, "LVGL do Display", EXAMPLE_LVGL_TASK_STACK_SIZE, NULL, EXAMPLE_LVGL_TASK_PRIORITY, NULL);
-//    xTaskCreate(json_task, "Tarefa para o JSON", 4096, NULL, 10, NULL);
-
-
-    // Protocolo SNTP
-
-    ++boot_count;
-        ESP_LOGI(TAG6, "Boot count: %d", boot_count);
-
-        time_t now;
-        struct tm timeinfo;
-        time(&now);
-        localtime_r(&now, &timeinfo);
-        // Is time set? If not, tm_year will be (1970 - 1900).
-        if (timeinfo.tm_year < (2016 - 1900)) {
-            ESP_LOGI(TAG6, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-            obtain_time();
-            // update 'now' variable with current time
-            time(&now);
-        }
-    #ifdef CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH
-        else {
-            // add 500 ms error to the current system time.
-            // Only to demonstrate a work of adjusting method!
-            {
-                ESP_LOGI(TAG6, "Add a error for test adjtime");
-                struct timeval tv_now;
-                gettimeofday(&tv_now, NULL);
-                int64_t cpu_time = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
-                int64_t error_time = cpu_time + 500 * 1000L;
-                struct timeval tv_error = { .tv_sec = error_time / 1000000L, .tv_usec = error_time % 1000000L };
-                settimeofday(&tv_error, NULL);
-            }
-
-            ESP_LOGI(TAG6, "Time was set, now just adjusting it. Use SMOOTH SYNC method.");
-            obtain_time();
-            // update 'now' variable with current time
-            time(&now);
-        }
-    #endif
-
-        char strftime_buf[64];
-
-        // Set timezone to Brasil Standard Time
-        setenv("TZ", "BRT3", 1);
-        tzset();
-        localtime_r(&now, &timeinfo);
-        strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-        ESP_LOGI(TAG6, "The current date/time in Brazil is: %s", strftime_buf);
-
-        if (sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH) {
-            struct timeval outdelta;
-            while (sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS) {
-                adjtime(NULL, &outdelta);
-                ESP_LOGI(TAG6, "Waiting for adjusting time ... outdelta = %jd sec: %li ms: %li us",
-                            (intmax_t)outdelta.tv_sec,
-                            outdelta.tv_usec/1000,
-                            outdelta.tv_usec%1000);
-                vTaskDelay(2000 / portTICK_PERIOD_MS);
-            }
-        }
-
-        const int deep_sleep_sec = 10;
-        ESP_LOGI(TAG6, "Entering deep sleep for %d seconds", deep_sleep_sec);
-        esp_deep_sleep(1000000LL * deep_sleep_sec);
-
+    
 }
